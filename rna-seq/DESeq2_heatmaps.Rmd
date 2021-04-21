@@ -1,0 +1,308 @@
+---
+title: "DESeq2 Heatmaps"
+output: html_notebook
+---
+
+```{r}
+library("pheatmap")
+
+```
+
+# All mice
+```{r}
+library(scales)
+library(pheatmap)
+library(grid)
+
+input_design <-  ~rin + sex + batch + strain
+deseq_object <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object <- DESeqDataSetFromMatrix(countData = counts_data,
+                                     colData = pheno_data,
+                                     design = input_design)
+
+deseq_object <- DESeq(deseq_object)
+deseq_results <- results(deseq_object, tidy = TRUE)
+top_gene_plot(deseq_object, deseq_results, 50, "all_mice_all_regions")
+post_deseq_outputs(deseq_object, "all_mice_all_regions")
+
+vsd <- vst(deseq_object, blind=FALSE)
+head(assay(vsd), 3)
+sampleDists <- dist(t(assay(vsd)), method = "euclidean")
+
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$strain, vsd$brain_region, sep="-")
+colnames(sampleDistMatrix) <- NULL
+samp_dist <- pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         color = viridis(100))
+
+
+ggsave(filename = paste0(outputs, "c58-b6_ah_sample_distance_20210226.png"),
+       plot = samp_dist, device = "png",
+       dpi = 100, height = 8.5, width = 11, units = "in")
+
+results_filter <- temp_results %>%
+  filter(gene_biotype == "protein_coding") %>% 
+  arrange(padj)
+
+norm_count <- estimateSizeFactors(deseq_object)
+norm_count <- as.data.frame(counts(norm_count, normalized=TRUE)) %>%
+  rownames_to_column("row") %>%
+  filter(row %in% results_filter[1:200,]$row) %>%
+  column_to_rownames("row")
+norm_count <- as.matrix(norm_count)
+norm_count <- norm_count + 1
+norm_count <- log2(norm_count)
+
+scales::viridis_pal(begin = 0, end = 1)(10)
+heatmap_annotations <- pheno_data %>%
+  dplyr::select(sex, strain, sociability) %>%
+  mutate(sex = recode(sex, "F" = "female", "M" = "male"))
+
+annotation_colors <- list(
+  strain = c(B6 = "#3E4A89FF", C58J = "#6DCD59FF"),
+  #brain_region = c(A = "#3E4A89FF", H = "#6DCD59FF"),
+  sociability = c(high = "#3E4A89FF", low = "#6DCD59FF"),
+  sex = c(female = "#3E4A89FF", male = "#6DCD59FF"))
+
+
+plot <- pheatmap(norm_count, cluster_rows = TRUE, show_rownames = FALSE,
+                 cluster_cols = TRUE, annotation_col = heatmap_annotations, 
+                 annotation_colors =  annotation_colors, color = viridis(100), 
+                 border_color = NA, clustering_distance_cols = "euclidean", 
+                 clustering_distance_rows = "euclidean", treeheight_row = 0,
+                 cutree_cols = 2)
+
+ggsave(filename = paste0(outputs, "c58-b6_heatmap_amygdala_protein-coding_20210226.png"),
+       plot = plot, device = "png",
+       dpi = 100, height = 8.5, width = 9, units = "in")
+
+```
+
+# All mice, A
+```{r}
+library(scales)
+library(pheatmap)
+library(grid)
+
+subset_deseq("brain_region", "A")
+input_design <-  ~rin + sex + batch + oligo + l2_it_en_tl + ca3 + strain
+deseq_object <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object <- DESeq(deseq_object)
+deseq_results <- results(deseq_object, tidy = TRUE)
+results_filter <- temp_results %>%
+  filter(gene_biotype == "protein_coding") %>% 
+  arrange(padj)
+
+norm_count <- estimateSizeFactors(deseq_object)
+norm_count <- as.data.frame(counts(norm_count, normalized=TRUE)) %>%
+  rownames_to_column("row") %>%
+  filter(row %in% results_filter[1:200,]$row) %>%
+  column_to_rownames("row")
+norm_count <- as.matrix(norm_count)
+norm_count <- norm_count + 1
+norm_count <- log2(norm_count)
+
+scales::viridis_pal(begin = 0, end = 1)(10)
+heatmap_annotations <- pheno_data %>%
+  dplyr::select(sex, strain, sociability) %>%
+  mutate(sex = recode(sex, "F" = "female", "M" = "male"))
+
+annotation_colors <- list(
+  strain = c(B6 = "#3E4A89FF", C58J = "#6DCD59FF"),
+  #brain_region = c(A = "#3E4A89FF", H = "#6DCD59FF"),
+  sociability = c(high = "#3E4A89FF", low = "#6DCD59FF"),
+  sex = c(female = "#3E4A89FF", male = "#6DCD59FF"))
+
+
+plot <- pheatmap(norm_count, cluster_rows = TRUE, show_rownames = FALSE,
+                 cluster_cols = TRUE, annotation_col = heatmap_annotations, 
+                 annotation_colors =  annotation_colors, color = viridis(100), 
+                 border_color = NA, clustering_distance_cols = "euclidean", 
+                 clustering_distance_rows = "euclidean", treeheight_row = 0,
+                 cutree_cols = 2)
+
+ggsave(filename = paste0(outputs, "c58-b6_heatmap_amygdala_protein-coding_20210226.png"),
+       plot = plot, device = "png",
+       dpi = 100, height = 8.5, width = 9, units = "in")
+
+```
+
+# All mice, H
+```{r}
+library(scales)
+library(pheatmap)
+library(grid)
+
+subset_deseq("brain_region", "H")
+input_design <-  ~rin + sex + batch + oligo + l2_it_en_tl + ca3 + strain
+deseq_object <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object <- DESeq(deseq_object)
+deseq_results <- results(deseq_object, tidy = TRUE)
+top_gene_plot(deseq_object, deseq_results, 50, "hip_strain")
+post_deseq_outputs(deseq_object, "hip_strain")
+
+
+results_filter <- temp_results %>%
+  filter(gene_biotype == "protein_coding") %>% 
+  arrange(padj)
+
+norm_count <- estimateSizeFactors(deseq_object)
+norm_count <- as.data.frame(counts(norm_count, normalized=TRUE)) %>%
+  rownames_to_column("row") %>%
+  filter(row %in% results_filter[1:200,]$row) %>%
+  column_to_rownames("row")
+norm_count <- as.matrix(norm_count)
+norm_count <- norm_count + 1
+norm_count <- log2(norm_count)
+
+scales::viridis_pal(begin = 0, end = 1)(10)
+heatmap_annotations <- pheno_data %>%
+  dplyr::select(sex, strain, sociability) %>%
+  mutate(sex = recode(sex, "F" = "female", "M" = "male"))
+
+annotation_colors <- list(
+  strain = c(B6 = "#3E4A89FF", C58J = "#6DCD59FF"),
+  #brain_region = c(A = "#3E4A89FF", H = "#6DCD59FF"),
+  sociability = c(high = "#3E4A89FF", low = "#6DCD59FF"),
+  sex = c(female = "#3E4A89FF", male = "#6DCD59FF"))
+
+
+plot <- pheatmap(norm_count, cluster_rows = TRUE, show_rownames = FALSE,
+                 cluster_cols = TRUE, annotation_col = heatmap_annotations, 
+                 annotation_colors =  annotation_colors, color = viridis(100), 
+                 border_color = NA, clustering_distance_cols = "euclidean", 
+                 clustering_distance_rows = "euclidean", treeheight_row = 0,
+                 cutree_cols = 2)
+
+ggsave(filename = paste0(outputs, "c58-b6_heatmap_hippocampus_protein-coding_20210226.png"),
+       plot = plot, device = "png",
+       dpi = 100, height = 8.5, width = 9, units = "in")
+
+```
+
+# C58, A
+```{r}
+library(scales)
+library(pheatmap)
+library(grid)
+
+subset_deseq_multi("brain_region", "A", "strain", "C58J")
+input_design <- ~batch + sex + rin + x260_230 + l2_it_en_tl + oligo + ca3 + dist_sum_hr1 + soc_prox_str1
+deseq_object <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object <- DESeq(deseq_object)
+deseq_results <- results(deseq_object, tidy = TRUE)
+top_gene_plot(deseq_object, deseq_results, 50, "amy_c58_social")
+post_deseq_outputs(deseq_object, "amy_c58_social")
+
+temp_results <- as.data.frame(results(deseq_object), tidy = TRUE)
+temp_results <- rownames_to_column(temp_results, var = "row")
+temp_results <- temp_results %>%
+  filter(!is.na(pvalue)) %>%
+  filter(pvalue <= 0.05) %>%
+  arrange(pvalue)
+
+# Retrieving gene symbol and biotype using Biomart
+temp_results <- (get_gene_symbol(temp_results))
+
+results_filter <- temp_results %>%
+  filter(gene_biotype == "protein_coding") %>% 
+  arrange(pvalue)
+
+norm_count <- estimateSizeFactors(deseq_object)
+norm_count <- as.data.frame(counts(norm_count, normalized=TRUE)) %>%
+  rownames_to_column("row") %>%
+  filter(row %in% results_filter[1:200,]$row) %>%
+  column_to_rownames("row")
+norm_count <- as.matrix(norm_count)
+norm_count <- norm_count + 1
+norm_count <- log2(norm_count)
+
+scales::viridis_pal(begin = 0, end = 1)(10)
+heatmap_annotations <- pheno_data %>%
+    dplyr::select(sex, sociability) %>%
+    mutate(sex = recode(sex, "F" = "female", "M" = "male"))
+
+annotation_colors <- list(
+  #strain = c(B6 = "#3E4A89FF", C58J = "#6DCD59FF"),
+  #brain_region = c(A = "#3E4A89FF", H = "#6DCD59FF"),
+  sociability = c(high = "#3E4A89FF", low = "#6DCD59FF"),
+  sex = c(female = "#3E4A89FF", male = "#6DCD59FF"))
+
+
+plot <- pheatmap(norm_count, cluster_rows = TRUE, show_rownames = FALSE,
+                 cluster_cols = TRUE, annotation_col = heatmap_annotations, 
+                 annotation_colors =  annotation_colors, color = viridis(100), 
+                 border_color = NA, clustering_distance_cols = "euclidean", 
+                 clustering_distance_rows = "euclidean", treeheight_row = 0,
+                 cutree_cols = 1)
+
+ggsave(filename = paste0(outputs, "c58_heatmap_amygdala_protein-coding_20210226.png"),
+       plot = plot, device = "png",
+       dpi = 100, height = 8.5, width = 9, units = "in")
+
+```
+
+# C58, H
+```{r}
+library(scales)
+library(pheatmap)
+library(grid)
+
+subset_deseq_multi("brain_region", "H", "strain", "C58J")
+input_design <- ~batch + sex + rin + x260_230 + l2_it_en_tl + oligo + ca3 + dist_sum_hr1 + soc_prox_str1
+deseq_object <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object <- DESeq(deseq_object)
+deseq_results <- results(deseq_object, tidy = TRUE)
+top_gene_plot(deseq_object, deseq_results, 50, "hip_c58_social")
+post_deseq_outputs(deseq_object, "hip_c58_social")
+
+
+results_filter <- temp_results %>%
+  filter(gene_biotype == "protein_coding") %>% 
+  arrange(pvalue)
+
+norm_count <- estimateSizeFactors(deseq_object)
+norm_count <- as.data.frame(counts(norm_count, normalized=TRUE)) %>%
+  rownames_to_column("row") %>%
+  filter(row %in% results_filter[1:200,]$row) %>%
+  column_to_rownames("row")
+norm_count <- as.matrix(norm_count)
+norm_count <- norm_count + 1
+norm_count <- log2(norm_count)
+
+scales::viridis_pal(begin = 0, end = 1)(10)
+heatmap_annotations <- pheno_data %>%
+    dplyr::select(sex, sociability) %>%
+    mutate(sex = recode(sex, "F" = "female", "M" = "male"))
+
+annotation_colors <- list(
+  #strain = c(B6 = "#3E4A89FF", C58J = "#6DCD59FF"),
+  #brain_region = c(A = "#3E4A89FF", H = "#6DCD59FF"),
+  sociability = c(high = "#3E4A89FF", low = "#6DCD59FF"),
+  sex = c(female = "#3E4A89FF", male = "#6DCD59FF"))
+
+
+plot <- pheatmap(norm_count, cluster_rows = TRUE, show_rownames = FALSE,
+                 cluster_cols = TRUE, annotation_col = heatmap_annotations, 
+                 annotation_colors =  annotation_colors, color = viridis(100), 
+                 border_color = NA, clustering_distance_cols = "euclidean", 
+                 clustering_distance_rows = "euclidean", treeheight_row = 0,
+                 cutree_cols = 1)
+
+ggsave(filename = paste0(outputs, "c58_heatmap_hippocampus_protein-coding_20210226.png"),
+       plot = plot, device = "png",
+       dpi = 100, height = 8.5, width = 9, units = "in")
+
+```
