@@ -1,0 +1,476 @@
+---
+title: "RNbeads Results Tables Summaries & Visualization"
+output: html_notebook
+---
+
+```{r}
+library(dplyr)
+library(vroom)
+library(janitor)
+library(ggplot2)
+library(stringr)
+library(cowplot)
+
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+
+write2tab <- function(df, filename){
+  write.table(df, file = paste0(outputs, filename), sep = "\t", quote = FALSE,
+              row.names = FALSE, col.names = TRUE)
+}
+```
+
+# Importing data - Amygdala
+```{r}
+list.files(inputs)
+
+# Strain
+amy_strain_cov <- vroom(paste0(inputs, "amy_strain_covg_summary.csv")) %>% clean_names()
+
+amy_strain_genes <- vroom(paste0(inputs, "amy_strain_differential_meth_genes.csv")) %>% 
+  clean_names()  #%>%
+  # filter(comb_p_adj_fdr < 0.05)
+write2tab(amy_strain_genes, "amy_strain_fgsea_genes.txt")
+
+amy_strain_prom <- vroom(paste0(inputs, "amy_strain_differential_meth_promoters.csv")) %>% 
+  clean_names() %>%
+  filter(comb_p_adj_fdr < 0.05)
+write2tab(amy_strain_prom, "amy_strain_sig_promoters.txt")
+
+amy_strain_cgi <- vroom(paste0(inputs, "amy_strain_differential_meth_cgi.csv")) %>% 
+  clean_names() %>%
+  filter(comb_p_adj_fdr < 0.05)
+
+amy_strain_cpg <- vroom(paste0(inputs, "amy_strain_differential_meth_site.csv")) %>% 
+  clean_names()
+
+# Social
+# amy_soc_cov <- vroom(paste0(inputs, "amy_soc_covg_summary.csv")) %>% clean_names()
+# 
+amy_soc_genes <- vroom(paste0(inputs, "amy_soc_differential_meth_genes.csv")) %>% 
+  clean_names()
+write2tab(amy_soc_genes, "amy_soc_fgsea_genes.txt")
+# 
+# amy_soc_prom <- vroom(paste0(inputs, "amy_soc_differential_meth_prom.csv")) %>% 
+#   clean_names() %>%
+#   filter(comb_p_adj_fdr < 0.05)
+# write2tab(amy_soc_prom, "amy_soc_sig_promoters.txt")
+# 
+# amy_soc_cgi <- vroom(paste0(inputs, "amy_soc_differential_meth_cgi.csv")) %>% 
+#   clean_names() %>%
+#   filter(comb_p_adj_fdr < 0.05)
+# 
+amy_soc_cpg <- vroom(paste0(inputs, "amy_soc_differential_meth_cpg.csv")) %>% 
+   clean_names()
+
+hip_soc_cpg <- vroom(paste0(inputs, "hip_soc_differential_meth_cpg.csv")) %>% 
+   clean_names()
+```
+
+# Importing data - Hippocampus
+```{r}
+list.files(inputs)
+
+hip_strain_cov <- vroom(paste0(inputs, "hip_strain_covg_summary.csv")) %>% clean_names()
+
+hip_strain_genes <- vroom(paste0(inputs, "hip_strain_differential_meth_genes.csv")) %>% 
+  clean_names() %>%
+  filter(comb_p_adj_fdr < 0.05)
+write2tab(hip_strain_genes, "hip_strain_sig_genes.txt")
+
+hip_strain_prom <- vroom(paste0(inputs, "hip_strain_differential_meth_promoters.csv")) %>% 
+  clean_names() %>%
+  filter(comb_p_adj_fdr < 0.05)
+
+hip_strain_cgi <- vroom(paste0(inputs, "hip_strain_differential_meth_cgi.csv")) %>% 
+  clean_names() %>%
+  filter(comb_p_adj_fdr < 0.05)
+
+hip_strain_cpg <- vroom(paste0(inputs, "hip_strain_differential_meth_site.csv")) %>% 
+  clean_names()
+
+# # Social
+# hip_soc_cov <- vroom(paste0(inputs, "hip_soc_covg_summary.csv")) %>% clean_names()
+# 
+hip_soc_genes <- vroom(paste0(inputs, "hip_soc_differential_meth_genes.csv")) %>%
+  clean_names()
+write2tab(hip_soc_genes, "hip_soc_fgsea_genes.txt")
+# 
+# hip_soc_prom <- vroom(paste0(inputs, "hip_soc_differential_meth_prom.csv")) %>% 
+#   clean_names() %>%
+#   filter(comb_p_adj_fdr < 0.05)
+# write2tab(hip_soc_prom, "hip_soc_sig_promoters.txt")
+# 
+# hip_soc_cgi <- vroom(paste0(inputs, "hip_soc_differential_meth_cgi.csv")) %>% 
+#   clean_names() %>%
+#   filter(comb_p_adj_fdr < 0.05)
+# 
+# hip_soc_cpg <- vroom(paste0(inputs, "hip_soc_differential_meth_cpg.csv")) %>% 
+#   clean_names()
+```
+
+# Volcano Plots
+```{r}
+library(EnhancedVolcano)
+fancy_vol <- function(results, gene_list, pval_thresh, title, subtitle){
+  EnhancedVolcano(results,
+  lab = NA,
+  x = 'mean_diff',
+  y = 'diffmeth_p_adj_fdr', 
+  selectLab = gene_list, 
+  xlab = "Difference in Mean Methylation",
+  ylab = "-log FDR-adjusted p-value",
+  pCutoff = 0.05,
+  xlim = c(-1, 1),
+  ylim = c(0, .5),
+  FCcutoff = .1,
+  pointSize = 4.0,
+  labSize = 6,
+  labCol = 'black',
+  #labFace = 'bold',
+  boxedLabels = TRUE,
+  colAlpha = 4/5,
+  legendPosition = 'right',
+  legendLabSize = 18,
+  axisLabSize = 18, 
+  titleLabSize = 24, 
+  subtitleLabSize = 18,
+  legendIconSize = 4.0,
+  drawConnectors = TRUE,
+  widthConnectors = 1.0,
+  colConnectors = 'black', 
+  col = c("#440154FF", "#3E4A89FF", "#1F9E89FF", "#BD3786FF"),
+  title = title, 
+  subtitle = subtitle)
+}
+
+amy_strain_cpg_2 <- amy_strain_cpg %>%
+  rowwise() %>%
+  mutate(mean_diff = -mean_diff)
+
+hip_strain_cpg_2 <- hip_strain_cpg %>%
+  rowwise() %>%
+  mutate(mean_diff = -mean_diff)
+
+# Social
+amy_soc_cpg_2 <- amy_soc_cpg %>%
+  rowwise() %>%
+  mutate(mean_diff = -mean_diff)
+
+hip_soc_cpg_2 <- hip_soc_cpg %>%
+  rowwise() %>%
+  mutate(mean_diff = -mean_diff)
+
+
+amy_vol <- fancy_vol(results = amy_strain_cpg_2, gene_list = NULL, pval_thresh = 0.05,
+                     title = "B6 vs. C58J Methylation", subtitle = "Amygdala")
+ggsave(filename = paste0(outputs,"amygdala_strain_meth_volcano_20210305.png"), plot = amy_vol,
+       width = 14, height = 10, units = "in", dpi = 100)
+
+hip_vol <- fancy_vol(results = hip_strain_cpg_2, gene_list = NULL, pval_thresh = 0.05,
+                     title = "B6 vs. C58J Methylation", subtitle = "Hippocampus")
+ggsave(filename = paste0(outputs,"hippocampus_strain_meth_volcano_20210305.png"), plot = hip_vol,
+       width = 14, height = 10, units = "in", dpi = 100)
+
+# Soci
+amy_soc_vol <- fancy_vol(results = amy_soc_cpg_2, gene_list = NULL, pval_thresh = 0.05,
+                     title = "C58J Low vs. High Sociability", subtitle = "Amygdala")
+ggsave(filename = paste0(outputs,"amygdala_soc_meth_volcano_20210305.png"), plot = amy_soc_vol,
+       width = 14, height = 10, units = "in", dpi = 100)
+
+hip_soc_vol <- fancy_vol(results = hip_soc_cpg_2, gene_list = NULL, pval_thresh = 0.05,
+                     title = "C58J Low vs. High Sociability", subtitle = "Hippocampus")
+ggsave(filename = paste0(outputs,"hippocampus_soc_meth_volcano_20210305.png"), plot = hip_soc_vol,
+       width = 14, height = 10, units = "in", dpi = 100)
+
+library(cowplot)
+
+legend <- get_legend(amy_vol + guides(color = guide_legend(nrow = 1)) +
+    theme(legend.position = "bottom"))
+
+
+multi_vol <- plot_grid(amy_vol + theme(legend.position="none"), 
+                     hip_vol + theme(legend.position="none"),
+                     align = 'h', nrow = 1,
+                     labels = c("A", "B"))
+
+multi_vol <- plot_grid(multi_vol, legend, ncol = 1, rel_heights = c(1, .1))
+
+ggsave(filename = "volcano_grid_methylation_20210305.png", plot = multi_vol,
+       width = 16, height = 8, units = "in", dpi = 150)
+
+mean(dplyr::filter(amy_strain_cpg, diffmeth_p_adj_fdr < 0.05)$mean_diff)
+mean(dplyr::filter(hip_strain_cpg, diffmeth_p_adj_fdr < 0.05)$mean_diff)
+
+```
+
+
+# Manhattan Plots
+#### Amygdala manhattans
+```{r}
+# Lets see if we can visualize these on the genome 
+library(scales)
+library(qqman)
+scales::viridis_pal(begin = 0, end = 1)(10)
+amy_sigs <- filter(amy_strain_cpg, diffmeth_p_adj_fdr < 0.05)$id
+amy_strain_manhattan_df <- as_tibble(amy_strain_cpg) %>%
+  rename('chr' = "chromosome", "pos" = "start") %>%
+  mutate(chr = str_remove(chr, "^chr")) %>%
+  dplyr::select(chr, pos, diffmeth_p_val, id) %>%
+  arrange(chr, pos)
+amy_strain_manhattan_df$chr <- as.numeric(amy_strain_manhattan_df$chr)
+
+png(filename = paste0(outputs,"amy_strain_cpg_manhattan_20210301.png"), 
+    width = 10, height = 8, units = "in", res = 100)
+
+manhattan_v2(amy_strain_manhattan_df, main = NULL,
+      cex = 0.6, cex.axis = 0.9, col = c("#440154FF","#3E4A89FF"), suggestive = FALSE,
+      genomewideline = FALSE, chr = "chr", bp = "pos", snp = "id", p = "diffmeth_p_val", ylim = c(0, 15),
+      highlight = amy_sigs)
+
+dev.off()
+
+# Amy Social
+amy_soc_sigs <- filter(amy_soc_cpg, diffmeth_p_adj_fdr < 0.4)$id
+amy_soc_manhattan_df <- as_tibble(amy_soc_cpg) %>%
+  rename('chr' = "chromosome", "pos" = "start") %>%
+  mutate(chr = str_remove(chr, "^chr")) %>%
+  dplyr::select(chr, pos, diffmeth_p_val, id) %>%
+  arrange(chr, pos)
+amy_soc_manhattan_df$chr <- as.numeric(amy_soc_manhattan_df$chr)
+
+
+png(filename = paste0(outputs,"amy_soc_cpg_manhattan_20210301.png"), 
+    width = 10, height = 8, units = "in", res = 100)
+
+amy_soc_manhattan <- manhattan_v2(amy_soc_manhattan_df, main = NULL,
+          cex = 0.6, cex.axis = 0.9, col = c("#440154FF","#3E4A89FF"), suggestive = FALSE,
+          genomewideline = FALSE, chr = "chr", bp = "pos", snp = "id", p = "diffmeth_p_val", ylim = c(0, 15))
+
+dev.off()
+```
+# Output bed-format CGIs to annotate in UCSC
+```{r}
+write2tab(select(hip_strain_cgi, chromosome, start, end) %>%
+            rename("chr" = "chromosome") %>%
+            mutate(chr = str_remove(chr, "chr")),
+          "rnb_hip_strain_cgi_20210302.txt")
+write2tab(amy_strain_cgi, "amy_strain_cgi.txt")
+write2tab(select(amy_strain_cgi, chromosome, start, end) %>%
+            rename("chr" = "chromosome") %>%
+            mutate(chr = str_remove(chr, "chr")),
+          "rnb_amy_strain_cgi_20210302.txt")
+
+write2tab(select(hip_strain_genes, symbol),
+          "rnb_hip_strain_genes_20210302.txt")
+write2tab(select(amy_strain_genes, symbol),
+          "rnb_amy_strain_genes_20210302.txt")
+
+# use these functions to look for overlap between gene / promoter hits
+write2tab(as.data.frame(Reduce(intersect, list(amy_strain_genes$symbol, amy_strain_prom$symbol))), "common_symbols_amy_strain.txt")
+
+write2tab(as.data.frame(Reduce(setdiff, list(amy_strain_genes$symbol, amy_strain_prom$symbol))), "amy_strain_gene_unique.txt")
+
+write2tab(as.data.frame(Reduce(setdiff, list(amy_strain_prom$symbol, amy_strain_genes$symbol))), "amy_strain_prom_unique.txt")
+
+
+# Hippocampus
+write2tab(as.data.frame(Reduce(intersect, list(hip_strain_genes$symbol, hip_strain_prom$symbol))), "common_symbols_hip_strain.txt")
+
+write2tab(as.data.frame(Reduce(setdiff, list(hip_strain_genes$symbol, hip_strain_prom$symbol))), "hip_strain_gene_unique.txt")
+
+write2tab(as.data.frame(Reduce(setdiff, list(hip_strain_prom$symbol, hip_strain_genes$symbol))), "hip_strain_prom_unique.txt")
+
+
+```
+
+
+#### Hippocampus Manhattans
+```{r}
+# Lets see if we can visualize these on the genome 
+library(scales)
+library(qqman)
+scales::viridis_pal(begin = 0, end = 1)(10)
+hip_sigs <- filter(hip_strain_cpg, diffmeth_p_adj_fdr < 0.05)$id
+hip_strain_manhattan_df <- as_tibble(hip_strain_cpg) %>%
+  rename('chr' = "chromosome", "pos" = "start") %>%
+  mutate(chr = str_remove(chr, "^chr")) %>%
+  dplyr::select(chr, pos, diffmeth_p_val, id) %>%
+  arrange(chr, pos)
+hip_strain_manhattan_df$chr <- as.numeric(hip_strain_manhattan_df$chr)
+
+png(filename = paste0(outputs,"hip_strain_cpg_manhattan_20210301.png"), 
+    width = 10, height = 8, units = "in", res = 100)
+
+manhattan_v2(hip_strain_manhattan_df, main = NULL,
+      cex = 0.6, cex.axis = 0.9, col = c("#440154FF","#3E4A89FF"), suggestive = FALSE,
+      genomewideline = FALSE, chr = "chr", bp = "pos", snp = "id", p = "diffmeth_p_val",
+      highlight = hip_sigs, ylim = c(0, 15))
+
+dev.off()
+
+# hip Social
+hip_soc_sigs <- filter(hip_soc_cpg, diffmeth_p_adj_fdr < 0.4)$id
+hip_soc_manhattan_df <- as_tibble(hip_soc_cpg) %>%
+  rename('chr' = "chromosome", "pos" = "start") %>%
+  mutate(chr = str_remove(chr, "^chr")) %>%
+  dplyr::select(chr, pos, diffmeth_p_val, id) %>%
+  arrange(chr, pos)
+hip_soc_manhattan_df$chr <- as.numeric(hip_soc_manhattan_df$chr)
+
+
+png(filename = paste0(outputs,"hip_soc_cpg_manhattan_20210301.png"), 
+    width = 10, height = 8, units = "in", res = 100)
+
+hip_soc_manhattan <- manhattan_v2(hip_soc_manhattan_df, main = NULL,
+          cex = 0.6, cex.axis = 0.9, col = c("#440154FF","#3E4A89FF"), suggestive = FALSE,
+          genomewideline = FALSE, chr = "chr", bp = "pos", snp = "id", p = "diffmeth_p_val", 
+          ylim = c(0, 15))
+
+dev.off()
+```
+
+
+#### revised manhattan function 
+to improve visualization for my needs
+
+
+```{r}
+manhattan_v2 <- function (x, chr = "CHR", bp = "BP", p = "P", snp = "SNP", col = c("gray10", 
+    "gray60"), chrlabs = NULL, suggestiveline = -log10(1e-05), 
+    genomewideline = -log10(5e-08), highlight = NULL, logp = TRUE, 
+    annotatePval = NULL, annotateTop = TRUE, ...) 
+{
+    CHR = BP = P = index = NULL
+    if (!(chr %in% names(x))) 
+        stop(paste("Column", chr, "not found!"))
+    if (!(bp %in% names(x))) 
+        stop(paste("Column", bp, "not found!"))
+    if (!(p %in% names(x))) 
+        stop(paste("Column", p, "not found!"))
+    if (!(snp %in% names(x))) 
+        warning(paste("No SNP column found. OK unless you're trying to highlight."))
+    if (!is.numeric(x[[chr]])) 
+        stop(paste(chr, "column should be numeric. Do you have 'X', 'Y', 'MT', etc? If so change to numbers and try again."))
+    if (!is.numeric(x[[bp]])) 
+        stop(paste(bp, "column should be numeric."))
+    if (!is.numeric(x[[p]])) 
+        stop(paste(p, "column should be numeric."))
+    d = data.frame(CHR = x[[chr]], BP = x[[bp]], P = x[[p]])
+    if (!is.null(x[[snp]])) 
+        d = transform(d, SNP = x[[snp]])
+    d <- subset(d, (is.numeric(CHR) & is.numeric(BP) & is.numeric(P)))
+    d <- d[order(d$CHR, d$BP), ]
+    if (logp) {
+        d$logp <- -log10(d$P)
+    }
+    else {
+        d$logp <- d$P
+    }
+    d$pos = NA
+    d$index = NA
+    ind = 0
+    for (i in unique(d$CHR)) {
+        ind = ind + 1
+        d[d$CHR == i, ]$index = ind
+    }
+    nchr = length(unique(d$CHR))
+    if (nchr == 1) {
+        d$pos = d$BP
+        ticks = floor(length(d$pos))/2 + 1
+        xlabel = paste("Chromosome", unique(d$CHR), "position")
+        labs = ticks
+    }
+    else {
+        lastbase = 0
+        ticks = NULL
+        for (i in unique(d$index)) {
+            if (i == 1) {
+                d[d$index == i, ]$pos = d[d$index == i, ]$BP
+            }
+            else {
+                lastbase = lastbase + tail(subset(d, index == 
+                  i - 1)$BP, 1)
+                d[d$index == i, ]$pos = d[d$index == i, ]$BP + 
+                  lastbase
+            }
+            ticks = c(ticks, (min(d[d$index == i, ]$pos) + max(d[d$index == 
+                i, ]$pos))/2 + 1)
+        }
+        xlabel = "Chromosome"
+        labs <- unique(d$CHR)
+    }
+    xmax = ceiling(max(d$pos) * 1.03)
+    xmin = floor(max(d$pos) * -0.03)
+    def_args <- list(xaxt = "n", bty = "n", xaxs = "i", yaxs = "i", 
+        las = 1, pch = 20, xlim = c(xmin, xmax), ylim = c(0, 
+            ceiling(max(d$logp))), xlab = xlabel, ylab = expression(-log[10](italic(p))))
+    dotargs <- list(...)
+    do.call("plot", c(NA, dotargs, def_args[!names(def_args) %in% 
+        names(dotargs)]))
+    if (!is.null(chrlabs)) {
+        if (is.character(chrlabs)) {
+            if (length(chrlabs) == length(labs)) {
+                labs <- chrlabs
+            }
+            else {
+                warning("You're trying to specify chromosome labels but the number of labels != number of chromosomes.")
+            }
+        }
+        else {
+            warning("If you're trying to specify chromosome labels, chrlabs must be a character vector")
+        }
+    }
+    if (nchr == 1) {
+        axis(1, ...)
+    }
+    else {
+        axis(1, at = ticks, labels = labs, ...)
+    }
+    col = rep(col, max(d$CHR))
+    if (nchr == 1) {
+        with(d, points(pos, logp, pch = 20, col = col[1], ...))
+    }
+    else {
+        icol = 1
+        for (i in unique(d$index)) {
+            with(d[d$index == unique(d$index)[i], ], points(pos, 
+                logp, col = col[icol], pch = 20, ...))
+            icol = icol + 1
+        }
+    }
+    if (suggestiveline) 
+        abline(h = suggestiveline, col = "blue")
+    if (genomewideline) 
+        abline(h = genomewideline, col = "red")
+    if (!is.null(highlight)) {
+        if (any(!(highlight %in% d$SNP))) 
+            warning("You're trying to highlight SNPs that don't exist in your results.")
+        d.highlight = d[which(d$SNP %in% highlight), ]
+        with(d.highlight, points(pos, logp, col = "#26828EFF", pch = 20, 
+            ...))
+    }
+    if (!is.null(annotatePval)) {
+        topHits = subset(d, P <= annotatePval)
+        par(xpd = TRUE)
+        if (annotateTop == FALSE) {
+            with(subset(d, P <= annotatePval), textxy(pos, -log10(P), 
+                offset = 0.625, labs = topHits$SNP, cex = 0.45), 
+                ...)
+        }
+        else {
+            topHits <- topHits[order(topHits$P), ]
+            topSNPs <- NULL
+            for (i in unique(topHits$CHR)) {
+                chrSNPs <- topHits[topHits$CHR == i, ]
+                topSNPs <- rbind(topSNPs, chrSNPs[1, ])
+            }
+            textxy(topSNPs$pos, -log10(topSNPs$P), offset = 0.625, 
+                labs = topSNPs$SNP, cex = 0.5, ...)
+        }
+    }
+    par(xpd = FALSE)
+}
+```
+
+
