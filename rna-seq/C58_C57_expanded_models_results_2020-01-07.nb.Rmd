@@ -1,0 +1,836 @@
+---
+title: "C58J C57B6J RNA-seq Comparison"
+output: html_notebook
+---
+
+Differential expression profiling in the amygdala and hippocampus of C58/J and C57BL/6J mice, as well as between social strata within C58/J. 
+
+
+```{r eval=FALSE}
+library(tidyverse)
+library(janitor)
+library(vroom)
+library(purrr)
+library(stringr)
+library(DESeq2)
+library(pheatmap)
+library(fdrtool)
+library(viridis)
+library(GWASTools)
+library(cowplot)
+library(ggplot2)
+library(ggsignif)
+library(fgsea)
+library(EnhancedVolcano)
+```
+
+# Importing data
+
+```{r}
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+list.files(inputs)
+
+pheno_data <- vroom(paste0(inputs, "UNC_mouse_phenodata_behavior_music_20210225.txt")) %>%
+  clean_names() %>%
+  arrange(sample_id) %>%
+  filter(sample_id != "L4H")
+pheno_data <- as.data.frame(pheno_data)
+rownames(pheno_data) <- pheno_data$sample_id
+
+# Preparing phenodata for PCA / Eigenplot
+pheno_eigen <- pheno_data %>%
+  mutate(sex = recode(sex, "F" = 1, "M" = 0)) %>%
+  mutate(strain = recode(strain, "B6" = 1, "C58J" = 0)) %>%
+  mutate(batch = recode(batch, "A" = 0, "B" = 1, "C" = 2, "D" = 3)) %>%
+  mutate(brain_region = recode(brain_region, "A" = 0, "H" = 1)) %>%
+  mutate(sociability = recode(sociability, "high" = 1, "low" = 0)) %>%
+  mutate(code = recode(code, "Control" = 1, "Low" = 0, "High" = 2)) %>%
+  dplyr::select(-sample_id)
+
+# Defining factors
+factor_coloumns <- c("sex", "strain", "sociability", "batch", "brain_region",
+                    "litter", "code")
+pheno_eigen[factor_coloumns] <- lapply(pheno_eigen[factor_coloumns], factor)
+rownames(pheno_eigen) <- pheno_data$sample_id
+
+# Subset phenodata table by brain region
+pheno_eigen_a <- pheno_eigen %>% filter(brain_region == 0) %>% select(-brain_region)
+pheno_eigen_h <- pheno_eigen %>% filter(brain_region == 1) %>% select(-brain_region)
+
+# Subset C58 phenodata
+pheno_eigen_a_c58 <- pheno_eigen %>% 
+  filter(brain_region == 0 & strain == 0) %>% 
+  select(-brain_region, -strain)
+pheno_eigen_h_c58 <- pheno_eigen %>% 
+  filter(brain_region == 1 & strain == 0) %>% 
+  select(-brain_region, -strain)
+
+# Import RNA-seq counts data
+counts_data <- vroom(paste0(inputs, "deseq_counts_matrix.txt")) %>%
+  select(-L4H)
+counts_data <- as.data.frame(counts_data)
+rownames(counts_data) <- counts_data$gene_id
+counts_data <- counts_data[,-1]
+
+# Check that the phenodata IDs / order match those of the counts data
+all(rownames(pheno_data) == colnames(counts_data))
+```
+
+
+# PCA analysis
+
+Generate biplots, scree, eigencor, pairs
+
+```{r eval=FALSE}
+library(PCAtools)
+library(Biobase)
+
+dir.create(paste0(outputs,"plots/pca"), recursive = TRUE)
+pca_outputs <- paste0(outputs, "plots/pca/")
+
+# Log transforming the values
+log2_counts_matrix <- counts_data
+log2_counts_matrix <- as.matrix(log2_counts_matrix)
+log2_counts_matrix <- log2_counts_matrix + 1
+log2_counts_matrix <- log2(log2_counts_matrix)
+all(colnames(log2_counts_matrix) == rownames(pheno_data))
+
+# subset matrices both strains
+colnames(log2_counts_matrix) 
+l2cm_a <- as.data.frame(log2_counts_matrix) %>%
+  rownames_to_column("gene") %>%
+  dplyr::select(gene, rownames(pheno_eigen_a)) %>%
+  column_to_rownames("gene")
+l2cm_a <- as.matrix(l2cm_a)
+
+l2cm_h <- as.data.frame(log2_counts_matrix) %>%
+  rownames_to_column("gene") %>%
+  dplyr::select(gene, rownames(pheno_eigen_h)) %>%
+  column_to_rownames("gene")
+l2cm_h <- as.matrix(l2cm_h)
+
+# C58 Only
+l2cm_a_c58 <- as.data.frame(log2_counts_matrix) %>%
+  rownames_to_column("gene") %>%
+  dplyr::select(gene, rownames(pheno_eigen_a_c58)) %>%
+  column_to_rownames("gene")
+l2cm_a_c58 <- as.matrix(l2cm_a_c58)
+
+l2cm_h_c58 <- as.data.frame(log2_counts_matrix) %>%
+  rownames_to_column("gene") %>%
+  dplyr::select(gene, rownames(pheno_eigen_h_c58)) %>%
+  column_to_rownames("gene")
+l2cm_h_c58 <- as.matrix(l2cm_h_c58)
+
+p <- pca(mat = log2_counts_matrix, metadata = as.data.frame(pheno_data))
+
+pa <- pca(mat = l2cm_a, metadata = as.data.frame(pheno_eigen_a))
+ph <- pca(mat = l2cm_h, metadata = as.data.frame(pheno_eigen_h))
+
+pa58 <- pca(mat = l2cm_a_c58, metadata = as.data.frame(pheno_eigen_a_c58))
+ph58 <- pca(mat = l2cm_h_c58, metadata = as.data.frame(pheno_eigen_h_c58))
+
+rm(log2_counts_matrix, p, pa, pa58, pairsplot, ph, ph58, scree, biplot)
+rm(list=ls(pattern="eigen"))
+
+```
+
+
+```{r eval=FALSE}
+library(viridis)
+library(scales)
+show_col(viridis_pal()(15))
+
+
+scree <- screeplot(pa,
+                   axisLabSize = 18,
+                   titleLabSize = 22,
+                   hline = 80,
+                   title = "scree - between strains amygdala")
+
+
+png(filename = paste0(pca_outputs, "RNAseq_scree_amygdala_betweenstrain.png"), height = 8, width = 15, units = "in", res = 100)
+scree
+dev.off()
+
+biplot <- biplot(p, 
+                 shape = "strain",
+                 colby = "brain_region",
+                 hline = 0,
+                 vline = 0,
+                 xlim = c(-150, 150),
+                 ylim = c(-150, 150),
+                 legendPosition = 'right',
+                 legendLabSize = 14,
+                 legendIconSize = 8.0)
+biplot
+
+png(filename = paste0(pca_outputs, "rnaseq_biplot_pc1_2.png"), height = 8, width = 8, units = "in", res = 150)
+biplot
+dev.off()
+
+
+pairsplot <- pairsplot(p,
+  components = getComponents(p, c(1:10)),
+  triangle = TRUE, trianglelabSize = 12,
+  hline = 0, vline = 0,
+  pointSize = 0.4,
+  gridlines.major = FALSE, gridlines.minor = FALSE,
+  colby = 'brain_region',
+  shape = "strain",
+  title = 'Pairs plot', plotaxes = FALSE,
+  margingaps = unit(c(-0.01, -0.01, -0.01, -0.01), 'cm'))
+
+png(filename = paste0(pca_outputs, "DESEQ2_C58J_C57_pairs_plot_20201213.png"),
+    height = 8, width = 8, units = "in", res = 150)
+pairsplot
+dev.off()
+
+# Eigen Amygdala Strain
+eigencor_plot_a <- eigencorplot(pa,
+    components = getComponents(p, 1:10),
+    metavars = colnames(pheno_eigen_a),
+    cexCorval = 1,
+    col = c("#238A8DFF", "black", "#FDE725FF"),
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'PC1-10 Correlations - B6/C58 Amygdala',
+    colFrame = 'white',
+    plotRsquared = FALSE)
+
+png(filename = paste0(pca_outputs, "PCA_eigencor_A_DESEQ2_20200107.png"),
+    height = 8, width = 10, units = "in", res = 100)
+eigencor_plot_a
+dev.off()
+
+# Eigen Hippocampus Strain
+eigencor_plot_h <- eigencorplot(ph,
+    components = getComponents(p, 1:10),
+    metavars = colnames(pheno_eigen_a),
+    cexCorval = 1,
+    col = c("#238A8DFF", "black", "#FDE725FF"),
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'PC1-10 Correlations - B6/C58 Hippocampus',
+    colFrame = 'white',
+    plotRsquared = FALSE)
+
+png(filename = paste0(pca_outputs, "PCA_eigencor_H_DESEQ2_20200107.png"),
+    height = 8, width = 10, units = "in", res = 100)
+eigencor_plot_h
+dev.off()
+
+## Just C58J
+# Eigen Amygdala C58
+eigencor_plot_a_c58 <- eigencorplot(pa58,
+    components = getComponents(p, 1:10),
+    metavars = colnames(pheno_eigen_a_c58),
+    cexCorval = 1,
+    col = c("#238A8DFF", "black", "#FDE725FF"),
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'PC1-10 Correlations - C58 Amygdala',
+    colFrame = 'white',
+    plotRsquared = FALSE)
+
+png(filename = paste0(pca_outputs, "PCA_eigencor_Ac58_DESEQ2_20200107.png"),
+    height = 8, width = 10, units = "in", res = 100)
+eigencor_plot_a_c58
+dev.off()
+
+# Eigen Hippocampus C58
+eigencor_plot_h_c58 <- eigencorplot(ph58,
+    components = getComponents(p, 1:10),
+    metavars = colnames(pheno_eigen_h_c58),
+    cexCorval = 1,
+    col = c("#238A8DFF", "black", "#FDE725FF"),
+    colCorval = 'white',
+    fontCorval = 2,
+    posLab = 'bottomleft',
+    rotLabX = 45,
+    posColKey = 'top',
+    cexLabColKey = 1.5,
+    scale = TRUE,
+    main = 'PC1-10 Correlations - C58 Hippocampus',
+    colFrame = 'white',
+    plotRsquared = FALSE)
+
+png(filename = paste0(pca_outputs, "PCA_eigencor_Hc58_DESEQ2_20200107.png"),
+    height = 8, width = 10, units = "in", res = 100)
+eigencor_plot_h_c58
+dev.off()
+```
+
+```{r}
+scree
+biplot
+pairsplot
+eigencor_plot
+rm(scree, biplot, pairsplot, eigencor_plot, p, pca_outputs)
+```
+
+
+# DESEQ2 analyses
+
+## Setting up biomart
+
+```{r}
+# Set up BiomaRt
+library(biomaRt)
+ensembl <- useEnsembl(biomart = "ensembl")
+mart <- useDataset("mmusculus_gene_ensembl", useMart("ensembl"))
+```
+
+## Subset Amygdala, differences by strain
+
+```{r}
+# Subset by amygdala to test strain differences ####
+subset_deseq("brain_region", "A")
+
+# Construct the Deseq2 object parameters
+input_design <- ~rin + sex + batch + oligo + x260_230 + l2_it_en_tl + ca3 + strain
+
+# making the object
+deseq_object_a_strain <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object_a_strain <- DESeq(deseq_object_a_strain)
+# Plotting post-deseq2 QC and summary data
+deseq_results_amy <- post_deseq_outputs(deseq_object_a_strain, "amy_strain")
+deseq_results_amy <- filter(deseq_results_amy, gene_biotype == "protein_coding")
+volcano_amy <- fancy_vol(deseq_results_amy, 
+                     gene_list = c("Pcdhb1", "Pcdhga11", "Pcdhgb6", 
+                                   "Cib3", "Tlr1", "Tlr3", "Robo4"),
+                     pval_thresh = tail(filter(deseq_results, 
+                                               padj < 0.05), n = 1)$pvalue,
+                     title = "B6 vs. C58J",
+                     subtitle = "Amygdala") 
+ggsave(filename = "amy_strain_volcano_lab_20210329.png", plot = volcano_amy,
+       width = 14, height = 10, units = "in", dpi = 100)
+
+top_gene_plot(deseq_object, deseq_results, 50, "amy_strain")
+
+
+rm(subsetted_sample_counts, subsetted_samples, deseq_object)
+gc()
+```
+
+## Subset Hippocampus, differences by strain
+
+```{r}
+# Subset by hippocampus to test strain differences ####
+subset_deseq("brain_region", "H")
+
+# Construct the Deseq2 object parameters
+input_design <-  ~rin + sex + batch + oligo + x260_230 + l2_it_en_tl + ca3 + strain
+
+# making the object
+deseq_object_hip <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object_hip <- DESeq(deseq_object_hip)
+deseq_results_hip <- post_deseq_outputs(deseq_object_hip, "hip_strain")
+deseq_results_hip <- filter(deseq_results_hip, gene_biotype == "protein_coding")
+volcano_hip <- fancy_vol(deseq_results_hip, 
+                     gene_list = c("Pcdhga4", "Pcdhga11", "Pcdhgb6", "Pcdhga8", 
+                                   "Cib3", "Tlr1", "Tlr3", "Tlr6", "Robo4"),
+                     pval_thresh = tail(filter(deseq_results, 
+                                               padj < 0.05), n = 1)$pvalue,
+                     title = "B6 vs. C58J",
+                     subtitle = "Hippocampus") 
+ggsave(filename = "hip_strain_volcano_lab_20210329.png", plot = volcano_hip,
+       width = 14, height = 10, units = "in", dpi = 100)
+
+# Plotting post-deseq2 QC and summary data
+top_gene_plot(deseq_object, deseq_results, 50, "hip_strain")
+post_deseq_outputs(deseq_object, "hip_strain")
+
+rm(subsetted_sample_counts, subsetted_samples, deseq_object)
+gc()
+```
+
+## Subset C58J amygdala, test on sociability
+
+```{r}
+# Subset by amygdala to test strain differences ####
+subset_deseq_multi("brain_region", "A", "strain", "C58J")
+
+
+# Construct the Deseq2 object parameters
+input_design <- ~batch + sex + rin + x260_230 + l2_it_en_tl + oligo + ca3 + sociability
+
+# making the object
+deseq_object_soc_amy <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object_soc_amy <- DESeq(deseq_object_soc_amy)
+deseq_results_soc_amy <- post_deseq_outputs(deseq_object_soc_amy, "amy_social")
+deseq_results_soc_amy <- filter(deseq_results_soc_amy, gene_biotype == "protein_coding")
+volcano_amy_soc <- fancy_vol(deseq_results_soc_amy, 
+                     gene_list = NA,
+                     pval_thresh = tail(filter(deseq_results, 
+                                               padj < 0.05), n = 1)$pvalue,
+                     title = "C58J: High vs. Low Sociability",
+                     subtitle = "Amygdala", xlim = c(-5, 5), fcutoff = 2) 
+ggsave(filename = "amy_social_volcano_20210305.png", plot = volcano_amy_soc,
+       width = 14, height = 10, units = "in", dpi = 100)
+
+# Plotting post-deseq2 QC and summary data
+top_gene_plot_c58(deseq_object, deseq_results, 50, "amy_c58_sociability")
+post_deseq_outputs(deseq_object, "amy_c58_sociability")
+
+rm(subsetted_sample_counts, subsetted_samples, deseq_object)
+gc()
+```
+
+## Subset C58J hippocampus, test on sociability
+
+```{r}
+# Subset by amygdala to test strain differences ####
+subset_deseq_multi("brain_region", "H", "strain", "C58J")
+
+# Construct the Deseq2 object parameters
+input_design <- ~batch + sex + rin + x260_230 + l2_it_en_tl + oligo + ca3 + sociability
+
+# making the object
+deseq_object_soc_hip <- ddseq_function(subsetted_sample_counts, subsetted_samples, input_design)
+
+# Run DESeq
+deseq_object_soc_hip <- DESeq(deseq_object_soc_hip)
+deseq_results_soc_hip <- post_deseq_outputs(deseq_object_soc_hip, "hip_social")
+deseq_results_soc_hip <- filter(deseq_results_soc_hip, gene_biotype == "protein_coding")
+volcano_hip_soc <- fancy_vol_soc(deseq_results_soc_hip, 
+                     gene_list = c("Drd1", "Drd2", "Ntn5", "Glp1r"),
+                     pval_thresh = tail(filter(deseq_results, 
+                                               padj < 0.05), n = 1)$pvalue,
+                     title = "C58J: High vs. Low Sociability",
+                     subtitle = "Hippocampus") 
+ggsave(filename = "hip_social_volcano_lab_20210429.png", plot = volcano_hip_soc,
+       width = 14, height = 10, units = "in", dpi = 100)
+
+# Plotting post-deseq2 QC and summary data
+top_gene_plot_c58(deseq_object, deseq_results, 50, "hip_c58_social")
+post_deseq_outputs(deseq_object, "hip_c58_social")
+
+rm(subsetted_sample_counts, subsetted_samples, deseq_object)
+gc()
+```
+
+# Volcano Mutiplot
+```{r}
+legend <- get_legend(volcano_amy + guides(color = guide_legend(nrow = 1)) +
+    theme(legend.position = "bottom"))
+
+
+amy_plots <- plot_grid(volcano_amy + theme(legend.position="none"), 
+                     volcano_amy_soc + theme(legend.position="none"),
+                     align = 'h', nrow = 1,
+                     labels = c("A", "B"))
+hip_plots <- plot_grid(volcano_hip + theme(legend.position="none"), 
+                     volcano_hip_soc + theme(legend.position="none"),
+                     align = 'h', nrow = 1,
+                     labels = c("A", "B"))
+
+amy_plots_2 <- plot_grid(amy_plots, legend, ncol = 1, rel_heights = c(1, .1))
+hip_plots_2 <- plot_grid(hip_plots, legend, ncol = 1, rel_heights = c(1, .1))
+
+ggsave(filename = "volcano_grid_amy_20210305.png", plot = amy_plots_2,
+       width = 16, height = 8, units = "in", dpi = 150)
+ggsave(filename = "volcano_grid_hip_20210305.png", plot = hip_plots_2,
+       width = 16, height = 8, units = "in", dpi = 150)
+
+```
+
+
+# Functions
+
+## Import deseq object from matrix
+```{r}
+
+ddseq_function <- function(ct, pt, ds){
+  temp_dds <- DESeqDataSetFromMatrix(countData = ct,
+                                     colData = pt,
+                                     design = ds)
+}
+```
+
+## Perform post-analysis results summary
+```{r}
+
+post_deseq_outputs <- function(obj, title){
+  print("Creating directories")
+  dir.create(paste0(outputs,title), showWarnings = FALSE)
+  outputdir <- paste0(outputs, title, "/")
+
+  print("Generating plots")
+  print("Generating dispersion estimates plot")
+  png(filename = paste0(outputdir, title, "_dispersion_estimates.png"), width = 5,
+      height = 3.5, units = "in", res = 300)
+  plotDispEsts(obj)
+  dev.off()
+
+  print("Generating histogram of p-values")
+  png(filename = paste0(outputdir, title, "_hist_pval.png"), width = 6, height = 4,
+      units = "in", res = 300)
+  hist(results(obj)$pvalue, main = paste0(title, " p-value distribution"))
+  dev.off()
+
+  print("Generating histogram of adjusted p-values")
+  png(filename = paste0(outputdir, title, "_hist_padj.png"), width = 6, height = 4,
+      units = "in", res = 300)
+  hist(results(obj)$padj, main = paste0(title, " adj p-value distribution"))
+  dev.off()
+
+  print("Generating MA plot")
+  png(filename = paste0(outputdir, title, "_MAplot.png"), width = 6,
+      height = 4, units = "in", res = 300)
+  plotMA(obj)
+  dev.off()
+
+  print("Generating QQ plot")
+  png(filename = paste0(outputdir, title, "_qqPlot.png"), width = 6,
+      height = 4, units = "in", res = 300)
+  qqPlot(results(obj)$pvalue)
+  dev.off()
+
+  print("Generating results summary")
+  
+  sink(paste0(outputdir, title, "_results_summary.txt"), append=FALSE, split=TRUE)
+  print(paste0("Results Summary Data for ", title))
+  print(summary(results(obj)))
+  print(summary(results(obj, tidy = TRUE)))
+  sink()
+
+  temp_results <- as.data.frame(results(obj), tidy = TRUE)
+  temp_results <- rownames_to_column(temp_results, var = "row")
+  temp_results <- temp_results %>%
+    filter(!is.na(padj)) %>%
+    filter(baseMean > 10) %>%
+    arrange(padj)
+
+  # Retrieving gene symbol and biotype using Biomart
+  print("Appending results with gene symbols and exporting")
+  temp_results <- (get_gene_symbol(temp_results))
+
+  # Summarizing the bio-types of the identified Ensembl IDs
+  temp_table <- as.data.frame(unclass(table(temp_results$gene_biotype)))
+  temp_table <- rownames_to_column(temp_table, var = "biotype")
+  colnames(temp_table) <- c("biotype", "count")
+  temp_table <- temp_table %>% arrange(desc(count))
+  write.table(temp_table, file = paste0(outputdir, title, "_biotype_summary.txt"),
+              quote = FALSE, row.names = FALSE, col.names = TRUE, sep = "\t")
+
+  # Write out the combined data table for the results with gene IDs and biotypes
+  write.table(temp_results, file = paste0(outputdir, title, Sys.Date(), "_results_table.txt"),
+            quote = FALSE, row.names = FALSE, col.names = TRUE, sep = "\t")
+  rownames(temp_results) <- make.names(temp_results$gene, unique = TRUE)
+  print("done.")
+  return(temp_results)
+}
+```
+
+
+## BiomaRt convert Ensembl gene identifier to gene symbol
+```{r}
+get_gene_symbol <- function(x){
+  print("Retrieving gene symbols from Ensembl")
+  temp_glist <- getBM(filters = "ensembl_gene_id",
+                      attributes = c("ensembl_gene_id", "mgi_symbol"),
+                      values = x$row, mart = mart)
+  temp_gene_annotation <- getBM(filters = "ensembl_gene_id",
+                                attributes = c("ensembl_gene_id", "gene_biotype"),
+                                values = x$row, mart = mart)
+  temp_glist <- temp_glist %>% as_tibble()
+  temp_glist <- temp_glist %>% distinct(ensembl_gene_id, .keep_all = TRUE)
+  temp_gene_annotation <- temp_gene_annotation %>% as_tibble()
+  temp_gene_annotation <- temp_gene_annotation %>% distinct(ensembl_gene_id, .keep_all = TRUE)
+  temp_genes <- left_join(x, temp_glist, by = c("row" = "ensembl_gene_id"))
+  temp_genes <- left_join(temp_genes, temp_gene_annotation, by = c("row" = "ensembl_gene_id"))
+  print("ID conversion complete")
+  temp_genes <- mutate(temp_genes, gene = ifelse(!is.na(mgi_symbol) == TRUE & mgi_symbol != "",
+                                              mgi_symbol, row))
+return(temp_genes)
+}
+
+GSS_standalone <- function(x, id){
+  print("Retrieving gene symbols from Ensembl")
+  temp_glist <- getBM(filters = "ensembl_gene_id",
+                      attributes = c("ensembl_gene_id", "mgi_symbol"),
+                      values = x$id, mart = mart)
+  temp_gene_annotation <- getBM(filters = "ensembl_gene_id",
+                                attributes = c("ensembl_gene_id", "gene_biotype"),
+                                values = x$id, mart = mart)
+  temp_glist <- temp_glist %>% as_tibble()
+  temp_glist <- temp_glist %>% distinct(ensembl_gene_id, .keep_all = TRUE)
+  temp_gene_annotation <- temp_gene_annotation %>% as_tibble()
+  temp_gene_annotation <- temp_gene_annotation %>% distinct(ensembl_gene_id, .keep_all = TRUE)
+  temp_genes <- left_join(x, temp_glist, by = c("gene_id" = "ensembl_gene_id"))
+  temp_genes <- left_join(temp_genes, temp_gene_annotation, by = c("gene_id" = "ensembl_gene_id"))
+  print("ID conversion complete")
+  temp_genes <- mutate(temp_genes, gene = ifelse(!is.na(mgi_symbol) == TRUE & mgi_symbol != "",
+                                              mgi_symbol, gene_id))
+return(temp_genes)
+}
+```
+
+
+## Subset samples for in-group analyses
+```{r}
+subset_deseq <- function(var, var_name){
+  subsetted_samples <<- subset(pheno_data, pheno_data[,var] == var_name)
+  subsetted_sample_counts <<- counts_data[, names(counts_data) %in% subsetted_samples$sample_id]
+  rownames(subsetted_samples) <- subsetted_samples$sample_id
+}
+
+# For subsetting samples by two factors (ie. strain, region)
+subset_deseq_multi <- function(var1, var1_name, var2, var2_name){
+  subsetted_samples <<- subset(pheno_data, pheno_data[,var1] == var1_name &
+                                 pheno_data[,var2] == var2_name)
+  subsetted_sample_counts <<- counts_data[, names(counts_data) %in% subsetted_samples$sample_id]
+  rownames(subsetted_samples) <- subsetted_samples$sample_id
+}
+```
+
+## Top Hits Plot
+```{r}
+top_gene_plot <- function(obj, results, n, title){
+  outputdir <- paste0(outputs, title, "/")
+  dir.create(paste0(outputs, title, "/"))
+  # Generating plots for top n of genes
+  #https://github.com/hbctraining/DGE_workshop_salmon/blob/master/lessons/top20_genes-expression_plotting.md
+
+  # Get normalized counts matrix
+  # https://support.bioconductor.org/p/66067/#66072
+  norm_count <- estimateSizeFactors(obj)
+  norm_count <- as.data.frame(counts(norm_count, normalized=TRUE)) %>%
+    rownames_to_column(var = "row")
+
+  results_gene_id <- get_gene_symbol(results)
+
+  top_genes <- results_gene_id %>%
+        arrange(padj) %>% 	#Arrange rows by padj values
+        filter(gene_biotype == "protein_coding" & baseMean >= 10) %>%
+        dplyr::select(row, gene) %>%
+        head(n = n)
+
+  ## normalized counts for top significant genes
+  top_count <- norm_count %>%
+        dplyr::filter(row %in% top_genes$row)
+
+  top_count_2 <- left_join(dplyr::select(top_genes, row, gene), top_count, by = "row")
+
+  top_count_final <- top_count_2 %>%
+    dplyr::select(row, gene, everything()) %>%
+    dplyr::select(-row)
+
+  # Gathering the columns to have normalized counts to a single column
+  top_count_final <- top_count_final %>%
+  gather(colnames(top_count_final)[2:ncol(top_count_final)],
+         key = "samplename", value = "normalized_counts")
+
+  # Add metadata
+  top_count_final <- inner_join(pheno_data, top_count_final,
+                                   by = c("sample_id" = "samplename"))
+
+  ordered_list <- top_genes$gene
+
+  ## plot using ggplot2
+  plot <- ggplot(top_count_final) +
+        geom_boxplot(aes(x = factor(gene, level = ordered_list),
+                       y = normalized_counts,
+                       color = strain)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle(paste0("Top ", n, " DE genes: ", title)) +
+        theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 18, face = "bold")) +
+  theme(axis.text.y = element_text(size = 12)) +
+  scale_color_viridis(discrete = TRUE, begin = 0.2, end = 0.8, option = "D")
+
+  ggsave(plot = plot,
+         filename = paste0(outputdir, paste0("Top_", n, "_DE_genes_", title, ".png")),
+         device = "png", width = 0.3*n, height = 8, units = "in", dpi = 500)
+
+}
+
+
+
+top_gene_plot_c58 <- function(obj, results, n, title){
+  outputdir <- paste0(outputs, title, "/")
+  dir.create(paste0(outputs, title, "/"))
+  # Generating plots for top n of genes
+  #https://github.com/hbctraining/DGE_workshop_salmon/blob/master/lessons/top20_genes-expression_plotting.md
+
+  # Get normalized counts matrix
+  # https://support.bioconductor.org/p/66067/#66072
+  norm_count <- estimateSizeFactors(obj)
+  norm_count <- as.data.frame(counts(norm_count, normalized=TRUE)) %>%
+    rownames_to_column(var = "row")
+
+  results_gene_id <- get_gene_symbol(results)
+
+  top_genes <- results_gene_id %>%
+        arrange(padj) %>% 	#Arrange rows by padj values
+        filter(gene_biotype == "protein_coding" & baseMean >= 10) %>%
+        dplyr::select(row, gene) %>%
+        head(n = n)
+
+  ## normalized counts for top significant genes
+  top_count <- norm_count %>%
+        dplyr::filter(row %in% top_genes$row)
+
+  top_count_2 <- left_join(dplyr::select(top_genes, row, gene), top_count, by = "row")
+
+  top_count_final <- top_count_2 %>%
+    dplyr::select(row, gene, everything()) %>%
+    dplyr::select(-row)
+
+  # Gathering the columns to have normalized counts to a single column
+  top_count_final <- top_count_final %>%
+  gather(colnames(top_count_final)[2:ncol(top_count_final)],
+         key = "samplename", value = "normalized_counts")
+
+  # Add metadata
+  top_count_final <- inner_join(pheno_data, top_count_final,
+                                   by = c("sample_id" = "samplename"))
+
+  ordered_list <- top_genes$gene
+
+  ## plot using ggplot2
+  plot <- ggplot(top_count_final) +
+        geom_boxplot(aes(x = factor(gene, level = ordered_list),
+                       y = normalized_counts,
+                       color = sociability)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle(paste0("Top ", n, " DE genes: ", title)) +
+        theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 18, face = "bold")) +
+  theme(axis.text.y = element_text(size = 12)) +
+  scale_color_viridis(discrete = TRUE, begin = 0.2, end = 0.8, option = "D")
+
+  ggsave(plot = plot,
+         filename = paste0(outputdir, paste0("Top_", n, "_DE_genes_", title, ".png")),
+         device = "png", width = 0.3*n, height = 8, units = "in", dpi = 500)
+
+}
+```
+
+## Fancy Volcanoes
+```{r}
+scales::viridis_pal(begin = 0, end = 1)(10)
+scales::viridis_pal(begin = 0, end = 1, option = "plasma")(10)
+
+fancy_vol <- function(results, gene_list, pval_thresh, title, subtitle, fcutoff, xlim){
+  EnhancedVolcano(results,
+  lab = rownames(results),
+  x = 'log2FoldChange',
+  y = 'pvalue', 
+  selectLab = gene_list,
+  pCutoff = pval_thresh,
+  FCcutoff = fcutoff,
+  pointSize = 4.0,
+  # ylim = c(0,350),
+  xlim = xlim,
+  labCol = 'black',
+  # labhjust = -1,
+  # labvjust = -1,
+  labSize = 8, 
+  # lengthConnectors = unit(0.1, "npc"),
+  labFace = 'bold',
+  boxedLabels = TRUE,
+  colAlpha = 4/5,
+  legendPosition = 'right',
+  legendLabSize = 18,
+  axisLabSize = 18, 
+  titleLabSize = 24, 
+  subtitleLabSize = 18,
+  legendIconSize = 4.0,
+  drawConnectors = TRUE,
+  widthConnectors = 1.0,
+  colConnectors = 'black', 
+  col = c("#440154FF", "#3E4A89FF", "#1F9E89FF", "#BD3786FF"),
+  title = title, 
+  subtitle = subtitle)
+}
+
+fancy_vol_soc <- function(results, gene_list, pval_thresh, title, subtitle){
+  EnhancedVolcano(results,
+  lab = rownames(results),
+  x = 'log2FoldChange',
+  y = 'pvalue', 
+  selectLab = gene_list,
+  pCutoff = pval_thresh,
+  FCcutoff = 1,
+  pointSize = 4.0,
+  labSize = 6, 
+  labCol = 'black',
+  #labFace = 'bold',
+  boxedLabels = TRUE,
+  colAlpha = 4/5,
+  legendPosition = 'right',
+  legendLabSize = 18,
+  axisLabSize = 18, 
+  titleLabSize = 24, 
+  subtitleLabSize = 18,
+  legendIconSize = 4.0,
+  drawConnectors = TRUE,
+  widthConnectors = 1.0,
+  colConnectors = 'black', 
+  col = c("#440154FF", "#3E4A89FF", "#1F9E89FF", "#BD3786FF"),
+  title = title, 
+  subtitle = subtitle)
+}
+```
+
+# Curious about overlap in genes between results
+```{r}
+hip_results_sig <- hip_results_table %>% filter(padj < 0.05)
+amy_results_sig <- amy_results_table %>% filter(padj < 0.05)
+hip_soc_sig <- hip_soc_results_table %>% filter(padj < 0.05)
+amy_soc_sig <- amy_soc_results_table %>% filter(padj < 0.05)
+
+uniquegenes_hip <- hip_results_sig %>%
+  filter(!mgi_symbol %in% amy_results_sig$mgi_symbol)
+
+uniquegenes_amy <- amy_results_sig %>%
+  filter(!mgi_symbol %in% hip_results_sig$mgi_symbol)
+
+common_genes_hipamy <- hip_results_sig %>%
+  filter(mgi_symbol %in% amy_results_sig$mgi_symbol)
+
+write.table(common_genes_hipamy, file = paste0(outputs, "common_genes_hip_amy_strain_20210309.txt"),
+            quote = FALSE, sep = "\t", row.names = FALSE)
+
+write.table(common_genes_hipamy, file = paste0(outputs, "common_genes_hip_amy_strain_20210309.txt"),
+            quote = FALSE, sep = "\t", row.names = FALSE)
+
+uniquegenes_hip_soc <- hip_soc_sig %>%
+  filter(!mgi_symbol %in% amy_soc_sig$mgi_symbol)
+
+uniquegenes_amy_soc <- amy_soc_sig %>%
+  filter(!mgi_symbol %in% hip_soc_sig$mgi_symbol)
+```
+
+```
+
