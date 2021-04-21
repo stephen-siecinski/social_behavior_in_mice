@@ -1,0 +1,174 @@
+---
+title: "dmrseq analysis"
+output: html_notebook
+---
+
+```{r}
+library(bsseq)
+library(dmrseq)
+library(dplyr)
+library(ggplot2)
+library(janitor)
+library(stringr)
+```
+
+# set up directory structure ####
+```{r}
+root <- ".../SureSelect/initial_strain_comparison/dmrseq/" # DMPI root removed for GitHub
+outputs <- paste0(getwd(), "/outputs/")
+inputs <- paste0(getwd(), "/inputs/")
+```
+
+# set up the bsseq objects
+```{r}
+hip_samps <- list.files(paste0(inputs, "coverage_files/hippocampus"), full.names = TRUE)
+hip_samp_names <- list.files(paste0(inputs, "coverage_files/hippocampus"))
+hip_samp_names <- str_extract(hip_samp_names, "[^-]+")
+hip_samp_names
+# [1] "E5"  "F3"  "F4"  "F6"  "F7"  "F9"  "G10" "G5"  "G6"  "G9"  "H4"  "I3" 
+# [13] "I5"  "J6"  "K11" "K3"  "L2"  "M2"  "O2"  "P2"  "P5" 
+# read in the bismark coverage objects ####
+
+hip_bs <- read.bismark(files = hip_samps, loci = NULL, rmZeroCov = TRUE, verbose = TRUE)
+sampleNames(hip_bs) <- hip_samp_names
+hip_bs
+
+# An object of type 'BSseq' with
+#   5585075 methylation loci
+#   21 samples
+# has not been smoothed
+# All assays are in-memory
+
+amy_samps <- list.files(paste0(inputs, "coverage_files/amygdala"), full.names = TRUE)
+amy_samp_names <- list.files(paste0(inputs, "coverage_files/amygdala"))
+amy_samp_names <- str_extract(amy_samp_names, "[^-]+")
+amy_samp_names
+# [1] "E5"  "F3"  "F4"  "F6"  "F7"  "F9"  "G10" "G5"  "G6"  "G9"  "H4"  "I3" 
+# [13] "I5"  "J6"  "K11" "K3"  "L2"  "L4"  "M2"  "N2"  "O2"  "P2"  "P5"
+
+amy_bs <- read.bismark(files = amy_samps, loci = NULL, rmZeroCov = TRUE, verbose = TRUE)
+sampleNames(amy_bs) <- amy_samp_names
+amy_bs
+
+# An object of type 'BSseq' with
+#   5664039 methylation loci
+#   23 samples
+# has not been smoothed
+# All assays are in-memory
+
+# Filtering the datasets by the autosomal chromosomes and ensuring there are no features included
+# with zero coveragge in a sample
+chromosomes <- c(seq(1,19, by = 1))
+amy_loci.idx <- which(DelayedMatrixStats::rowSums2(getCoverage(amy_bs, type="Cov")==0) == 0 &
+                    seqnames(amy_bs) %in% c(as.character(chromosomes)))
+
+hip_loci.idx <- which(DelayedMatrixStats::rowSums2(getCoverage(hip_bs, type = "Cov") == 0) == 0 &
+                        seqnames(hip_bs) %in% c(as.character(chromosomes)))
+
+hip_filtered <- hip_bs[hip_loci.idx, ]
+amy_filtered <- amy_bs[amy_loci.idx, ]
+```
+
+# Making the annotation file ####
+```{r}
+# configured the files "mm10_cpgi_table.csv" "mm10_gene_table.csv" using UCSC table outputs
+# https://bioconductor.org/packages/release/bioc/vignettes/GenomicRanges/inst/doc/GenomicRangesIntroduction.html
+
+
+# This required me to install
+source("https://bioconductor.org/biocLite.R")
+BiocManager::install("TxDb.Mmusculus.UCSC.mm10.knownGene")
+library("TxDb.Mmusculus.UCSC.mm10.knownGene")
+
+annotations <- getAnnot('mm10')
+seqlevels(annotations$CpGs) <- sub('chr','',seqlevels(annotations$CpGs))
+seqlevels(annotations$Exons) <- sub('chr','',seqlevels(annotations$Exons))
+
+# Appending phenodata to the bsseq objects
+pheno_data <- read.csv(paste0(inputs, "methylation_mouse_phenodata_20210227.txt"), sep = "\t")
+pheno_hip <- pheno_data %>%
+  filter(brain_region == "H")
+pheno_amy <- pheno_data %>%
+  filter(brain_region == "A")
+
+pheno_hip_c58 <- pheno_data %>%
+  filter(brain_region == "H" & strain == "C58J")
+pheno_amy_c58 <- pheno_data %>%
+  filter(brain_region == "A" & strain == "C58J")
+
+pData(hip_filtered) <- pheno_hip
+pData(amy_filtered) <- pheno_amy
+```
+
+# Setting up the empty dataframes that will be appended
+```{r}
+# v1.1 hippocampus: strain comparison using sex as a covariate ####
+
+regions_hip_strain <- dmrseq(bs = hip_filtered,
+                             cutoff = 0.1,
+                             testCovariate = "strain",
+                             adjustCovariate = c("sex", "batch", "ng_ul", "l2_it_en_tl", "ca3", "oligo"),
+                             maxPerms = 80,
+                             maxGap = 1000,
+                             bpSpan = 1000,
+                             minNumRegion = 5)
+
+regions_amy_strain <- dmrseq(bs = amy_filtered,
+                             cutoff = 0.1,
+                             testCovariate = "strain",
+                             adjustCovariate = c("sex", "batch", "ng_ul", "l2_it_en_tl", "ca3", "oligo"),
+                             maxPerms = 80,
+                             maxGap = 1000,
+                             bpSpan = 1000,
+                             minNumRegion = 5)
+
+```
+
+# Results and Plots
+## Hippocampus
+```{r}
+# Import hippocampus RDS files 
+hip_strain_bsseq <- readRDS(paste0(inputs,"hip_strain_bsseq.rds"))
+hip_strain_out <- readRDS(paste0(inputs, "hip_strain_deseq_results.rds"))
+
+hip_strain_results_table <- as.data.frame(hip_strain_out) %>%
+  dplyr::select(1:11) %>%
+  mutate(search_string = paste0(seqnames, ":", start, "-", end))
+
+write.table(hip_strain_results_table, file = paste0(outputs,"dmr_hip_strain_out_20210302.txt"),
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+# Hippocampus plots
+pdf(file = paste0(outputs, "hip_strain_DMRs_145.pdf"), width = 6, height = 4)
+plotDMRs(hip_strain_bsseq, regions = hip_strain_out[1:145,], testCovariate = "strain", annoTrack = annotations)
+dev.off()
+
+# Plotting the empirical distribution for the hippocampus samples
+png(file = paste0(outputs, "hip_strain_empirical_distribution.png"), width = 8, height = 5, units = "in", res = 300)
+plotEmpiricalDistribution(hip_strain_bsseq, testCovariate = "strain")
+dev.off()
+```
+## Amygdala
+```{r}
+# Import hippocampus RDS files 
+amy_strain_bsseq <- readRDS(paste0(inputs,"amy_strain_bsseq.rds"))
+amy_strain_out <- readRDS(paste0(inputs, "amy_strain_deseq_results.rds"))
+
+amy_strain_results_table <- as.data.frame(amy_strain_out) %>%
+  dplyr::select(1:11) %>%
+  filter(qval < 0.05) %>%
+  mutate(search_string = paste0(seqnames, ":", start, "-", end))
+
+write.table(amy_strain_results_table, file = paste0(outputs,"dmr_amy_strain_out_20210302.txt"),
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+# amypocampus plots
+pdf(file = paste0(outputs, "amy_strain_DMRs_145.pdf"), width = 6, height = 4)
+plotDMRs(amy_strain_bsseq, regions = amy_strain_out[1:248,], testCovariate = "strain", annoTrack = annotations)
+dev.off()
+
+# Plotting the empirical distribution for the amypocampus samples
+png(file = paste0(outputs, "amy_strain_empirical_distribution.png"), width = 8, height = 5, units = "in", res = 300)
+plotEmpiricalDistribution(amy_strain_bsseq, testCovariate = "strain")
+dev.off()
+```
