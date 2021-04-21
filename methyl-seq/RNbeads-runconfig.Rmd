@@ -1,0 +1,46 @@
+library(RnBeads)
+library(RnBeads.mm10)
+
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+
+# RNbeads options, needed to specify data formats, tests performed, parameters
+rnb.options(import.bed.style = "bismarkCov",
+            identifiers.column = "sample_id",
+            assembly = "mm10",
+            analysis.name = "Sociability Comparisons - Hippocampus",
+            email = "stephen.siecinski@duke.edu",
+            filtering.sex.chromosomes.removal = TRUE,
+            filtering.missing.value.quantile = 0,
+            filtering.low.coverage.masking = TRUE,
+            filtering.high.coverage.outliers = TRUE,
+            filtering.coverage.threshold = 100,
+            filtering.deviation.threshold = 0.01,
+            filtering.snp = "no",
+            imputation.method = "none",
+            differential.comparison.columns = "soc_prox_str1",
+            covariate.adjustment.columns = c("sex", "batch", "l2_it_en_tl", "ca3", "oligo"),
+            region.aggregation = "coverage.weighted",
+            differential.site.test.method = "limma",
+            import.table.separator = "\t",
+            qc.coverage.plots = TRUE,
+            export.to.csv = TRUE,
+            disk.dump.big.matrices = FALSE,
+            enforce.memory.management = FALSE,
+            exploratory.columns = c("sex", "soc_prox_str1", "batch",
+                                    "ng_ul", "x260_230", "l2_it_en_tl", "ca3",
+                                    "oligo"))
+
+# Run RNbeads with the previously established options
+rnb.run.analysis(dir.reports = paste0(outputs, "hippocampus_social_20210227"),
+                 data.source = paste0(inputs, "hip_soc"),
+                 data.type = "bs.bed.dir")
+
+
+
+# To establish the correct graphical output (prevents crash upon writing .pngs)
+# DISPLAY=DNA668:0
+# activate with program xeyes
+
+# To run with logging
+# nohup Rscript hip_soc.R </dev/null>hip_soc.out 2>hip_soc_err.out &
