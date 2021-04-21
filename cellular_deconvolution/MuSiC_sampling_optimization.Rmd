@@ -1,0 +1,606 @@
+---
+title: "MuSiC Subsampling Methods"
+output: html_notebook
+---
+
+# Rationale
+
+MuSiC estimates the number of cell in a bulk-seq dataset based on a given reference single-cell dataset. As a result, the result of the estimate will be skewed heavily by the source, quality, sampling method, and depth of the reference. My experiment utilized bulk-RNA-seq data from two inbred mouse strains (C58/J, C57B6/J) across 24 mice and two brain regions (hippocampus, amygdala) and I used single-cell data from the Allen Brain Atlas to estimate the relative neuronal cell proportions in my samples. [Allen Mouse Whole Cortex and Hippocampus 10x](https://portal.brain-map.org/atlases-and-data/rnaseq/mouse-whole-cortex-and-hippocampus-10x)
+
+The Allen dataset includes over one-million cells from the cortex and hippocampus of 49 mice. For each cell, there are measurements for 31,054 genes. As a result, the dataset is far too large to use with MuSiC in its base state. The dataset also includes samples from males and females, which one could argue should be used for fine-tuning the estimates. 
+
+My aim in this workbook is to evaluate how sampling methods and the total number of cells included for each cell identity affect the behavior of the algorithm. These results can be used to help guide others by quantitatively demonstrating a point of diminishing returns input cell numbers, the impact of sampling seeds, and the benefit of targeting reference single-cell subsamples to other demographics data (ie. sex). 
+
+---
+
+## Aims
+
+**Aim**
+
+- Using the same random seed, generate subsampled datasets consisting of 10, 50, 100, 500, 1000, and 5000 cells for each classification category. Find if / when the estimates stabilize around a given proportion for each class. Repeat this process across 6 different seeds to determine the effects of random smapling on estimates for a given sampling depth. 
+
+# Load packages  
+```{r}
+library(xbioc)
+library(dplyr)
+library(MuSiC)
+library(tidyverse)
+library(vroom)
+library(cowplot)
+library(viridis)
+```
+
+---
+
+# Functions
+
+I need a function that will take lists of input seeds, class identifiers, and sampling numbers, and output the results in an organized directory structure that can be transferred to the unix boxes to generate the subsampled allen counts matrices. 
+
+### Subsample Cell IDs
+
+Generates subsample cell IDs from the Allen metadata file that will be used to extract the corresponding cells from the Allen expression matrix on the unix box.
+
+```{r}
+get_subsample <- function(id, sex, num, seed){
+  for(s in sex){
+    print(paste("Running the script on", s, "mice."))
+  for(i in seed){
+    print(paste("Sampling seed id:", i))
+    set.seed(i)
+  for(x in num){
+    print(paste("Sampling a maximum of", x, "cells per cell type"))
+    results_list <- list()
+    z <- 1
+    for(c in id){
+      num_ids <- length(id)
+      print(paste("Extracting ids for", c, "cells"))
+      
+      out <- as_tibble(filter(allen_metadata_2, sub_id == c & donor_sex_label == s))
+      n_out <- length(which(out$sub_id == c))
+      print(paste("There are", n_out, c, "cells total."))
+        
+      if(n_out >= x){
+        out <- sample_n(out, x)
+      }
+        
+      if(n_out < x){
+          out <- sample_n(out, n_out)
+      }
+      results_list[[z]] <- out
+      z <- z + 1
+      }
+    results <- bind_rows(results_list)
+    results <- results %>%
+      dplyr::select(sample_name)
+    filename <- paste0(i, "-", x, "-", s, ".txt")
+    print(paste("Writing results:", filename))
+      
+    write.table(results$sample_name, file = paste0(outputs, filename),
+                  quote = FALSE, row.names = FALSE, col.names = FALSE,
+                  sep = "\t")
+      }
+    }
+  }
+}
+```
+
+
+### Generate expressionset objects
+Using expression matrices created by the bash script and the allen metadata to make expressionset objects that will be needed by MuSiC.
+
+```{r}
+
+make_exprsset <- function(in_dir, mat){
+  print("Making the transposed matrix")
+  matrix <- read.csv(paste0(in_dir, mat))
+  matrix <- matrix %>%
+    arrange(sample_name)
+  rownames(matrix) <- matrix$sample_name
+  matrix <- matrix %>%
+    dplyr::select(-sample_name)
+  matrix <- as.matrix(matrix)
+  matrix <- t(matrix)
+  
+  print("Generating the Allen metadata")
+  temp_metadata <- allen_metadata_2 %>%
+    filter(sample_name %in% colnames(matrix)) %>%
+    arrange(sample_name)
+  rownames(temp_metadata) <- temp_metadata$sample_name
+  
+  print("Making sure rownames of metadata match colnames of the matrix")
+  if(all(rownames(temp_metadata) == colnames(matrix))){
+    print("Temp matrix and phenodata are properly formatted")
+  } else {
+    stop("Temp matrix and phenodata are not properly formatted, make sure colnames and rownames of the respective objects are correct.")
+  }
+  
+  print("Creating the expressionset object")
+  annotated_metadata <- new("AnnotatedDataFrame", data = temp_metadata)
+  expressionset_object <- ExpressionSet(assayData = matrix,
+                                        phenoData = annotated_metadata)
+  print("Saving the RDS file")
+  saveRDS(expressionset_object, 
+          file = paste0(outputs, mat, ".rds"))
+}
+```
+
+
+### MuSiC Cell Proportion Estimates
+
+Given a list of expressionset objects, generate a consolidated table of estimates for the mouse bulk-seq samples for each seed and sampling depth level
+
+```{r}
+generate_estimates <- function(in_dir, obj, sexid){
+  
+  # Initializing list and index
+  results_list <- list()
+  z <- 1
+  
+  # Subsetting pheno data based on input sex
+  print("generating the subsetted pheno_data from bulk-seq data")
+  pheno_data <- pData(bulk_seq)
+  pdata_sub <- pheno_data %>%
+    dplyr::filter(sex == sexid)
+  bulkseq_sub <- bulk_seq[, sampleNames(bulk_seq) %in% pdata_sub$sample_id]
+  print(dim(pdata_sub))
+  
+  # Looping through each file in the targeted directory and generating estimates
+  for(x in obj){
+  print("generating the variable ID for the df")
+  sc_id <- paste0("df_",deparse(substitute(x)))
+  sc_id <- str_remove(sc_id, "\"")
+  print(paste("The deparsed ID is:", sc_id))
+  sc_id <- paste0(str_extract(sc_id, regex("^.*(?=.txt)")))
+  print(paste("the variable id is:", sc_id))
+  
+  print("reading in the RDS file for the single-cell expression set object")
+  rds_obj <- readRDS(paste0(in_dir, x))
+  cell_prop_estimates <- music_prop(bulk.eset = bulkseq_sub, 
+                         sc.eset = rds_obj,
+                         clusters = 'sub_id',
+                         sample = 'external_donor_name_label')
+  
+  print("Formatting the results df")
+  estimate_df <- as.data.frame(cell_prop_estimates$Est.prop.weighted)
+  estimate_df <- tibble::rownames_to_column(estimate_df, var = "sample_id")
+  estimate_df <- estimate_df %>% 
+  left_join(pheno_data, by = "sample_id")
+  
+  print("Adding the identifier to the final data frame")
+  estimate_df <- estimate_df %>%
+    mutate(data_source = sc_id)
+  print(paste("Appending results to slot", z, "of the results list"))
+  results_list[[z]] <- estimate_df
+  z <- z + 1
+  }
+  return(results_list)
+}
+```
+
+### Generates inter-seed variation metrics
+
+Using the results dataframe from the MuSiC function, generate a series of metrics to represent the relative variability between seeds and sampling depths
+
+```{r}
+get_isvm <- function(df){
+  depths <- as.factor(unique(df$depth))
+  samples<- as.factor(unique(df$sample_id))
+  results_df <- data.frame(matrix(ncol = 11, nrow = 0))
+  colnames(results_df) <- c("sample", "depth", "gaba_seed_effect",
+                            "gaba_min", "gaba_max", "glut_seed_effect",
+                            "glut_min", "glut_max", "non_neuro_seed_effect",
+                            "non_neuro_min", "non_neuro_max")
+  results_df <- as.tibble(results_df)
+  results_df <- results_df %>%
+    mutate_at(vars(1,2), as.character) %>%
+    mutate_at(vars(3:11), as.numeric)
+  print("Samples being evaluated:")
+  print(samples)
+  print("Depths being evaluated:")
+  print(depths)
+  for(d in depths){
+    for(s in samples){
+      print(paste("generating temp_df for depth", d, "and sample_id", s))
+      temp_df <- filter(df, depth == d, sample_id == s)
+      print(dim(temp_df))
+      print("calculating summary metrics")
+      gabse <- sd(temp_df$gaba)
+      print(paste("gabse =", gabse))
+      gabmin<- min(temp_df$gaba)
+      print(paste("gabmin =", gabmin))
+      gabmax <- max(temp_df$gaba)
+      print(paste("gabmax =", gabmax))
+      glutse <- sd(temp_df$glut)
+      print(paste("glutse =", glutse))
+      glutmin <- min(temp_df$glut)
+      print(paste("glutmin =", glutmin))
+      glutmax <- max(temp_df$glut)
+      print(paste("glutmax =", glutmax))
+      nnse <- sd(temp_df$non_neuro)
+      print(paste("nnse =", nnse))
+      nnmin <- min(temp_df$non_neuro)
+      print(paste("nnmin =", nnmin))
+      nnmax <- max(temp_df$non_neuro)
+      print(paste("nnmax =", nnmax))
+      print("appending results to results temp_df")
+      results_df <- results_df %>%
+        add_row(sample = s,
+                depth = d,
+                gaba_seed_effect = gabse,
+                gaba_min = gabmin,
+                gaba_max = gabmax,
+                glut_seed_effect = glutse,
+                glut_min = glutmin,
+                glut_max = glutmax,
+                non_neuro_seed_effect = nnse,
+                non_neuro_min = nnmin,
+                non_neuro_max = nnmax)
+    }
+  }
+  print("Returning consolidated results df")
+  return(results_df)
+}
+```
+
+---
+
+# Create the subsample files
+```{r}
+
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+
+allen_meta_glut <- dplyr::filter(allen_metadata, class_label == "Glutamatergic")
+allen_meta_gaba <- dplyr::filter(allen_metadata, class_label == "GABAergic")
+allen_meta_non <- dplyr::filter(allen_metadata, class_label == "Non-Neuronal")
+length(unique(allen_metadata_2$external_donor_name_label))
+
+# Cleaning up the allen metadata
+allen_metadata_2 <- allen_metadata %>%
+  rowwise() %>%
+  mutate(sub_id = ifelse(class_label == "Glutamatergic", "glut",
+                         ifelse(class_label == "GABAergic", "gaba",
+                                "non_neuro")))
+
+allen_metadata_2 <- allen_metadata_2 %>%
+  filter(sub_id != "") %>% 
+  dplyr::select(sample_name, sub_id, donor_sex_label, external_donor_name_label)
+
+table(allen_metadata_2$sub_id)
+
+# Setting up the input variables for the subset function
+seeds <- c(1, 2, 3, 5, 8)
+counts <- c(10, 50, 100, 500, 1000, 5000)
+cells <- c("gaba", "glut", "non_neuro")
+sex <- c("F", "M")
+
+get_subsample(id = cells, sex = sex, 
+              num = counts, seed = seeds)
+
+get_subsample(id = cells, sex = "F", 
+              num = 5000, seed = 1)
+```
+
+---
+
+# Converting cell ID lists to counts matrices
+This was run in bash on vlp-dmpianal02
+
+```{bash}
+#!/bin/bash
+
+outputs=/dmpi/analysis/SGregory/steve/unc_mouse_collaboration/RNA-seq/cellular_deconvolution/methods/outputs/
+inputs=/dmpi/analysis/SGregory/steve/unc_mouse_collaboration/RNA-seq/cellular_deconvolution/methods/inputs/
+
+echo "listing files in cell_list directory"
+files=$(ls)
+echo ${files}
+
+echo "Looping through each file and generating the output matrix"
+for i in ${files[@]}
+  do
+    echo "Extracting: " ${i}
+    head -n 1 ${inputs}matrix.csv > ${outputs}${i}
+    grep -f ${i} ${inputs}matrix.csv >> ${outputs}${i}
+    echo "Extraction for " ${i} " complete"
+  done
+
+# To run
+# nohup methods_subset_20210110.sh >> methods_subset_20210110.sh.out 2>&1 & tail -f methods_subset_20210110.sh.out & to keep a run log of the pipeline
+head -n 1 ${inputs}matrix.csv > mat_1-5000-F.txt
+grep -f 1-5000-F.txt ${inputs}matrix.csv > mat_1-5000-F.txt
+
+
+```
+
+---
+
+# Create ExpressionSet Objects
+  
+```{r}
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+
+# Cleaning up the allen metadata
+
+allen_metadata <- read.csv(paste0(inputs, "metadata.csv"))
+
+allen_metadata_2 <- allen_metadata %>%
+  rowwise() %>%
+  mutate(sub_id = ifelse(class_label == "Glutamatergic", "glut",
+                         ifelse(class_label == "GABAergic", "gaba",
+                                "non_neuro")))
+allen_metadata_2 <- allen_metadata_2 %>%
+  filter(sub_id != "") %>% 
+  dplyr::select(sample_name, sub_id, donor_sex_label, external_donor_name_label)
+
+bulk_seq <- readRDS(paste0(inputs, "UNC_c58c57_GEX_expressionset.rds"))
+
+# These directories contain the counts matrix files from the Allen reference single-cell dataset
+female_dir <- paste0(inputs, "females/")
+female_files <- list.files(female_dir)
+male_dir <- paste0(inputs, "males/")
+male_files <- list.files(male_dir)
+
+# Converting all of the matrix files into expressionset objects using the make_expresset function and the allen_metadata
+
+for (x in female_files){
+  make_exprsset(female_dir, x)
+}
+
+for (x in male_files){
+  make_exprsset(male_dir, x)
+}
+
+```
+
+---
+
+# Create cell estimates
+
+```{r}
+
+
+
+in_dir_f <- paste0(outputs, "female_rds/")
+files_f <- list.files(in_dir_f)
+
+results_f <- generate_estimates(in_dir_f, files_f, "F")
+results_f <- dplyr::bind_rows(results_f)
+table(results_f$data_source)
+
+in_dir_m <- paste0(outputs, "male_rds/")
+files_m <- list.files(in_dir_m)
+
+results_m <- generate_estimates(in_dir_m, files_m, "M")
+results_m <- dplyr::bind_rows(results_m)
+table(results_m$data_source)
+
+results_combined <- bind_rows(results_f, results_m)
+
+```
+
+---
+
+# Cleaning up the results file
+
+```{r}
+results_combined_2 <- results_combined %>%
+  mutate(seed = str_extract(data_source, regex("(?<=_)\\d+(?=-)"))) %>%
+  mutate(depth = str_extract(data_source, regex("(?<=-)\\d+(?=-)"))) %>%
+  dplyr::select(-data_source)
+results_combined_2$depth <- as.numeric(results_combined_2$depth)
+
+seeds <- unique(results_combined_2$seed)
+
+seed_impact <- get_isvm(results_combined_2)
+seed_impact <- seed_impact %>%
+  mutate(glut_range_size = glut_max - glut_min) %>% 
+  mutate(gaba_range_size = gaba_max - gaba_min) %>%
+  mutate(non_neuro_range_size = non_neuro_max - non_neuro_min)
+
+seed_impact$depth <- factor(seed_impact$depth, 
+                            levels = c("10", "50", "100", "500", "1000", "5000"))
+
+```
+
+---
+
+# Visualization
+```{r}
+
+plot_seed_by_depth <- function(df, dp, sx, rg, ct){
+  z <- 1
+  for(c in ct){
+  plot <- ggplot(data = dplyr::filter(df, depth == dp & sex == sx & brain_region == rg),
+         aes_string(x = "seed", y = c)) +
+  geom_jitter(size = 2, stroke = 1, width = 0.25, aes(color = sample_id)) +
+  geom_boxplot(alpha = 0.0) +
+  xlab("Random Seed") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle(paste(ifelse(rg == "A", "Amygdala", "Hippocampus"), 
+                ifelse(c == "gaba", "GABAergic", ifelse(c == "glut",
+                        "Glutamatergic", "Non-Nuero")), sx)) +
+  labs(subtitle = paste(dp, "cells sampled")) +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 1, size = 12)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +
+  theme(plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic")) +
+  theme(axis.text.y = element_text(size = 12)) +
+  scale_color_viridis(discrete = TRUE, begin = 0, end = 1, option = "D")
+  
+  assign(paste0("P", z), plot)
+  z <- z + 1
+  }
+  
+  
+  plots <- plot_grid(
+  P1 + theme(legend.position = "none"),
+  P2 + theme(legend.position = "none", axis.title.y = element_blank()),
+  P3 + theme(legend.position = "none", axis.title.y = element_blank()),
+  align = "vh",
+  hjust = -1,
+  nrow = 1)
+  
+  # extract the legend from one of the plots
+  legend <- get_legend(
+  # create some space to the left of the legend
+  P1 + theme(legend.box.margin = margin(0, 0, 0, 12)))
+  
+  plots <- plot_grid(plots, legend, rel_widths = c(3, .4))
+  return(plots)
+}
+
+cells <- c("gaba", "glut", "non_neuro")
+grid_plots_fa10 <- plot_seed_by_depth(df = results_combined_2, 
+                           dp = 10, 
+                           sx = "F",
+                           rg = "A",
+                           ct = cells)
+
+grid_plots_fa50 <- plot_seed_by_depth(df = results_combined_2, 
+                           dp = 50, 
+                           sx = "F",
+                           rg = "A",
+                           ct = cells)
+
+grid_plots_fa100 <- plot_seed_by_depth(df = results_combined_2, 
+                           dp = 100, 
+                           sx = "F",
+                           rg = "A",
+                           ct = cells)
+
+grid_plots_fa500 <- plot_seed_by_depth(df = results_combined_2, 
+                           dp = 500, 
+                           sx = "F",
+                           rg = "A",
+                           ct = cells)
+
+grid_plots_fa1000 <- plot_seed_by_depth(df = results_combined_2, 
+                           dp = 1000, 
+                           sx = "F",
+                           rg = "A",
+                           ct = cells)
+
+grid_plots_fa5000 <- plot_seed_by_depth(df = results_combined_2, 
+                           dp = 5000, 
+                           sx = "F",
+                           rg = "A",
+                           ct = cells)
+
+final_grid_1 <- plot_grid(grid_plots_fa10, grid_plots_fa50, grid_plots_fa100,
+                           nrow = 3)
+final_grid_2 <- plot_grid(grid_plots_fa500, grid_plots_fa1000, grid_plots_fa5000,
+                           nrow = 3)
+
+ggsave(plot = final_grid_1,
+     filename = paste0(outputs, paste0("MuSiC_sampling_depth_effects_10-100_20210114.png")),
+     device = "png", width = 13, height = 10, units = "in", dpi = 300)
+
+ggsave(plot = final_grid_2,
+     filename = paste0(outputs, paste0("MuSiC_sampling_depth_effects_500-5000_20210114.png")),
+     device = "png", width = 13, height = 10, units = "in", dpi = 300)
+```
+
+
+# Generating final, averaged estimate for DESeq2 modeling
+```{r}
+deseq_2_estimates <- filter(results_combined_2, depth == 5000)
+deseq_2_estimates <- deseq_2_estimates %>%
+  group_by(sample_id) %>%
+  summarise(gaba = mean(gaba), glut = mean(glut), non_neuro = mean(non_neuro))
+
+
+top_count_final <- top_count_final %>%
+  gather(colnames(top_count_final)[2:ncol(top_count_final)], 
+         key = "samplename", value = "normalized_counts")
+
+write.table(deseq_2_estimates, 
+            file = paste0(outputs, "deseq_2_cell_estimates_20210114.txt"),
+            quote = FALSE, col.names = TRUE, row.names = FALSE,)
+
+
+final_estimates_phenodata <- left_join(deseq_2_estimates, pheno_data, by = "sample_id")
+fepd_merged <- deseq_2_estimates %>%
+  pivot_longer(!sample_id, names_to = "cell_type", values_to = "proportion") %>%
+  left_join(pheno_data, by = "sample_id")
+
+
+plot_1 <- ggplot(data = dplyr::filter(fepd_merged, 
+                                    strain == "B6" & sex == "F"),
+         aes_string(x = "cell_type", y = "proportion")) +
+  geom_jitter(size = 2, stroke = 1, width = 0.25, aes(color = sample_id)) +
+  geom_boxplot(alpha = 0.0) +
+  xlab("") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle("Estimated Cell Proportions") +
+  labs(subtitle = "B6 Females") +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 0.5, size = 12)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +
+  theme(plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic")) +
+  theme(axis.text.y = element_text(size = 12)) +
+  scale_color_viridis(discrete = TRUE, begin = 0, end = 1, option = "D")
+
+plot_2 <- ggplot(data = dplyr::filter(fepd_merged, 
+                                    strain == "B6" & sex == "M"),
+         aes_string(x = "cell_type", y = "proportion")) +
+  geom_jitter(size = 2, stroke = 1, width = 0.25, aes(color = sample_id)) +
+  geom_boxplot(alpha = 0.0) +
+  xlab("") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle("Estimated Cell Proportions") +
+  labs(subtitle = "B6 Males") +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 0.5, size = 12)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +
+  theme(plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic")) +
+  theme(axis.text.y = element_text(size = 12)) +
+  scale_color_viridis(discrete = TRUE, begin = 0, end = 1, option = "D")
+
+plot_3 <- ggplot(data = dplyr::filter(fepd_merged, 
+                                    strain == "C58J" & sex == "F"),
+         aes_string(x = "cell_type", y = "proportion")) +
+  geom_jitter(size = 2, stroke = 1, width = 0.25, aes(color = sample_id)) +
+  geom_boxplot(alpha = 0.0) +
+  xlab("") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle("Estimated Cell Proportions") +
+  labs(subtitle = "C58J Females") +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 0.5, size = 12)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +
+  theme(plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic")) +
+  theme(axis.text.y = element_text(size = 12)) +
+  scale_color_viridis(discrete = TRUE, begin = 0, end = 1, option = "D")
+
+plot_4 <- ggplot(data = dplyr::filter(fepd_merged, 
+                                    strain == "C58J" & sex == "M"),
+         aes_string(x = "cell_type", y = "proportion")) +
+  geom_jitter(size = 2, stroke = 1, width = 0.25, aes(color = sample_id)) +
+  geom_boxplot(alpha = 0.0) +
+  xlab("") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle("Estimated Cell Proportions") +
+  labs(subtitle = "C58J Males") +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 0.5, size = 12)) +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold")) +
+  theme(plot.subtitle = element_text(hjust = 0.5, size = 12, face = "italic")) +
+  theme(axis.text.y = element_text(size = 12)) +
+  scale_color_viridis(discrete = TRUE, begin = 0, end = 1, option = "D")
+
+
+library(cowplot)
+gridplot <- plot_grid(plot_1, plot_2, plot_3, plot_4, nrow = 2, ncol = 2)
+
+ggsave(plot = gridplot,
+     filename = paste0(outputs, paste0("MuSiC_strain-sex_specific_estimates_20210115.png")),
+     device = "png", width = 13, height = 10, units = "in", dpi = 300)
+```
+
