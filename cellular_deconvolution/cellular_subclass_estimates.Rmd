@@ -1,0 +1,925 @@
+---
+title: "MuSiC Subclass Estimates - 20210208"
+output: html_notebook
+---
+
+```{r warning=FALSE}
+library(MuSiC)
+library(dplyr)
+library(vroom)
+library(stringr)
+library(janitor)
+library(xbioc)
+
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+options(digits=3, scipen = 999)
+```
+
+# Functions
+These will need to be modified from the methods functions because I'm no longer attempting to look at inter-seed variability. 
+
+#### Extract Subsample IDs
+```{r}
+get_subsample <- function(id, sex, num, seed){
+  for(s in sex){
+    print(paste("Running the script on", s, "mice."))
+  for(i in seed){
+    print(paste("Sampling seed id:", i))
+    set.seed(i)
+  for(x in num){
+    print(paste("Sampling a maximum of", x, "cells per cell type"))
+    results_list <- list()
+    z <- 1
+    for(c in id){
+      num_ids <- length(id)
+      print(paste("Extracting ids for", c, "cells"))
+      
+      out <- as_tibble(filter(allen_metadata_2, sub_id == c & donor_sex_label == s))
+      n_out <- length(which(out$sub_id == c))
+      print(paste("There are", n_out, c, "cells total."))
+        
+      if(n_out >= x){
+        out <- sample_n(out, x)
+      }
+        
+      if(n_out < x){
+          out <- sample_n(out, n_out)
+      }
+      results_list[[z]] <- out
+      z <- z + 1
+      }
+    results <- bind_rows(results_list)
+    results <- results %>%
+      dplyr::select(sample_name)
+    filename <- paste0(i, "-", x, "-", s, ".txt")
+    print(paste("Writing results:", filename))
+      
+    write.table(results$sample_name, file = paste0(outputs, filename),
+                  quote = FALSE, row.names = FALSE, col.names = FALSE,
+                  sep = "\t")
+      }
+    }
+  }
+}
+
+# Use this version to get ALL subclasses 
+get_subsample_subclass <- function(id, num, seed){
+  for(s in sex){
+    print(paste("Running the script on", s, "mice."))
+  for(i in seed){
+    print(paste("Sampling seed id:", i))
+    set.seed(i)
+  for(x in num){
+    print(paste("Sampling a maximum of", x, "cells per cell type"))
+    results_list <- list()
+    z <- 1
+    for(c in id){
+      num_ids <- length(id)
+      print(paste("Extracting ids for", c, "cells"))
+      
+      out <- as_tibble(filter(allen_metadata_2, subclass_label == c & donor_sex_label == s))
+      n_out <- length(which(out$subclass_label == c))
+      print(paste("There are", n_out, c, "cells total."))
+        
+      if(n_out >= x){
+        out <- sample_n(out, x)
+      }
+        
+      if(n_out < x){
+          out <- sample_n(out, n_out)
+      }
+      results_list[[z]] <- out
+      z <- z + 1
+      }
+    results <- bind_rows(results_list)
+    results <- results %>%
+      dplyr::select(sample_name)
+    filename <- paste0(i, "-", x, "-", s, "_all_subclass.txt")
+    print(paste("Writing results:", filename))
+      
+    write.table(results$sample_name, file = paste0(outputs, filename),
+                  quote = FALSE, row.names = FALSE, col.names = FALSE,
+                  sep = "\t")
+      }
+    }
+  }
+}
+
+
+# Non sex-specific
+get_subsample_subclass_sexless <- function(id, num, seed){
+  for(i in seed){
+    print(paste("Sampling seed id:", i))
+    set.seed(i)
+  for(x in num){
+    print(paste("Sampling a maximum of", x, "cells per cell type"))
+    results_list <- list()
+    z <- 1
+    for(c in id){
+      num_ids <- length(id)
+      print(paste("Extracting ids for", c, "cells"))
+      
+      out <- as_tibble(filter(allen_metadata_2, subclass_label == c))
+      n_out <- length(which(out$subclass_label == c))
+      print(paste("There are", n_out, c, "cells total."))
+        
+      if(n_out >= x){
+        out <- sample_n(out, x)
+      }
+        
+      if(n_out < x){
+          out <- sample_n(out, n_out)
+      }
+      results_list[[z]] <- out
+      z <- z + 1
+      }
+    results <- bind_rows(results_list)
+    results <- results %>%
+      dplyr::select(sample_name)
+    filename <- paste0(i, "-", x, "_all_subclass.txt")
+    print(paste("Writing results:", filename))
+      
+    write.table(results$sample_name, file = paste0(outputs, filename),
+                  quote = FALSE, row.names = FALSE, col.names = FALSE,
+                  sep = "\t")
+    }
+  }
+}
+
+```
+
+#### Make expressionset object
+```{r}
+make_exprsset <- function(in_dir, mat){
+  print("Making the transposed matrix")
+  matrix <- read.csv(paste0(in_dir, mat))
+  matrix <- matrix %>%
+    arrange(sample_name)
+  rownames(matrix) <- matrix$sample_name
+  matrix <- matrix %>%
+    dplyr::select(-sample_name)
+  print(paste("Were the rownames set?", head(rownames(matrix))))
+  matrix <- as.matrix(matrix)
+  matrix <- t(matrix)
+  
+  print("Generating the Allen metadata")
+  temp_metadata <- allen_metadata_2 %>%
+    filter(sample_name %in% colnames(matrix)) %>%
+    arrange(sample_name)
+  rownames(temp_metadata) <- temp_metadata$sample_name
+  
+  print("Making sure rownames of metadata match colnames of the matrix")
+  if(all(rownames(temp_metadata) == colnames(matrix))){
+    print("Temp matrix and phenodata are properly formatted")
+  } else {
+    stop("Temp matrix and phenodata are not properly formatted, make sure colnames and rownames of the respective objects are correct.")
+  }
+  
+  print("Creating the expressionset object")
+  annotated_metadata <- new("AnnotatedDataFrame", data = temp_metadata)
+  expressionset_object <- ExpressionSet(assayData = matrix,
+                                        phenoData = annotated_metadata)
+  print("Saving the RDS file")
+  saveRDS(expressionset_object, 
+          file = paste0(outputs, mat, ".rds"))
+}
+```
+
+
+### MuSiC Cell Proportion Estimates
+
+Given a list of expressionset objects, generate a consolidated table of estimates for the mouse bulk-seq samples for each seed and sampling depth level
+
+```{r}
+generate_estimates <- function(obj, sexid){
+  
+  # Initializing list and index
+  
+  # Subsetting pheno data based on input sex
+  print("generating the subsetted pheno_data from bulk-seq data")
+  pheno_data <- pData(bulk_seq)
+  pdata_sub <- pheno_data %>%
+    dplyr::filter(sex == sexid)
+  bulkseq_sub <- bulk_seq[, sampleNames(bulk_seq) %in% pdata_sub$sample_id]
+  print(dim(pdata_sub))
+  
+  # Generating estimates
+  
+  print("reading in the RDS file for the single-cell expression set object")
+  rds_obj <- readRDS(paste0(inputs, obj))
+  cell_prop_estimates <- music_prop(bulk.eset = bulkseq_sub, 
+                         sc.eset = rds_obj,
+                         clusters = 'subclass_label',
+                         sample = 'external_donor_name_label')
+  
+  # print("Formatting the results df")
+  # estimate_df <- as.data.frame(cell_prop_estimates$Est.prop.weighted)
+  # estimate_df <- tibble::rownames_to_column(estimate_df, var = "sample_id")
+  # estimate_df <- estimate_df %>% 
+  # left_join(pheno_data, by = "sample_id")
+  
+  return(cell_prop_estimates)
+}
+
+# Sexless ####
+generate_estimates_sexless <- function(obj){
+  
+  # Initializing list and index
+  
+  # Subsetting pheno data based on input sex
+  print("generating the subsetted pheno_data from bulk-seq data")
+  pheno_data <- pData(bulk_seq)
+  bulkseq_sub <- bulk_seq[, sampleNames(bulk_seq) %in% pheno_data$sample_id]
+  print(dim(pheno_data))
+  
+  # Generating estimates
+  
+  print("reading in the RDS file for the single-cell expression set object")
+  rds_obj <- readRDS(paste0(inputs, obj))
+  cell_prop_estimates <- music_prop(bulk.eset = bulkseq_sub, 
+                         sc.eset = rds_obj,
+                         clusters = 'class_label',
+                         sample = 'external_donor_name_label')
+  
+  # print("Formatting the results df")
+  # estimate_df <- as.data.frame(cell_prop_estimates$Est.prop.weighted)
+  # estimate_df <- tibble::rownames_to_column(estimate_df, var = "sample_id")
+  # estimate_df <- estimate_df %>% 
+  # left_join(pheno_data, by = "sample_id")
+  
+  return(cell_prop_estimates)
+  }
+```
+
+```{r}
+# linking to the metadata file directly because I don't want mulitiple half-gig copies on my computer 
+
+allen_metadata <- vroom("/Users/sks36/Desktop/R/mouse_project/MuSiC/methods/inputs/metadata.csv") %>% clean_names()
+
+# See what the distribution of subclass cells look like for each class
+table(filter(allen_metadata, class_label == "GABAergic")$subclass_label)
+table(filter(allen_metadata, class_label == "Glutamatergic")$subclass_label)
+table(filter(allen_metadata, class_label == "Non-Neuronal")$subclass_label)
+```
+
+
+
+```{r}
+allen_metadata_hip <- allen_metadata %>%
+  filter(region_label == "HIP")
+
+allen_metadata_2 <- allen_metadata %>%
+  rowwise() %>%
+  mutate(sub_id = ifelse(class_label == "Glutamatergic", "glut",
+                         ifelse(class_label == "GABAergic", "gaba",
+                                subclass_label)))
+allen_metadata_2$sub_id <- recode(allen_metadata_2$sub_id, 
+                                  "Oligo" = "oligo", "Astro" = "astro", 
+                                  "SMC-Peri" = "smc_peri", "Endo" = "endo", 
+                                  "VLMC" = "vlmc", 'Micro-PVM' = "micro_pvm")
+
+allen_metadata_2 <- allen_metadata %>%
+  filter(subclass_label != "")
+
+subclass_to_include <- c("Oligo", "Astro", "Endo", "Micro_PVM", "SMC_Peri",
+                         "VLMC", "Sst", "Lamp5", "Vip", "Pvalb", "Sncg", "Sst Chodl",
+                         "CA1-ProS", "SUB-ProS", "CA2", "CA3", "DG")
+
+# Final subsetted metadata file, excluding non-HPC Glutamatergic neurons and some of the very-low cell # classifications (Mies2 with one cell from one mouse). 
+
+allen_metadata_2 <- allen_metadata_2 %>%
+  dplyr::select(sample_name, donor_sex_label,
+    external_donor_name_label, subclass_label,
+    neighborhood_label, region_label)
+
+unique(allen_metadata_2$sub_id)
+unique(allen_metadata_2$subclass_label)
+```
+
+
+# Extract cells
+```{r}
+# Setting up the input variables for the subset function
+seeds <- 19850212
+counts <- c(2500)
+cells <- unique(allen_metadata_2$subclass_label)
+sex <- c("F", "M")
+
+sink(paste0(outputs, "20210221_music_no_filtering_subclass_log.txt"), 
+     append = FALSE, split = TRUE)
+get_subsample_subclass(id = cells, sex = sex, 
+              num = counts, seed = seeds)
+
+sink()
+
+sink(paste0(outputs, "music_no_filtering_subclass_mf2500_20210223_log.txt"), 
+     append = FALSE, split = TRUE)
+get_subsample_subclass_sexless(id = cells, num = counts, seed = seeds)
+
+sink()
+```
+
+
+# Import the extracted matrices
+
+```{r}
+list.files(inputs)
+make_exprsset(inputs, )
+make_exprsset(paste0(inputs, "mat_subset_files/"), "1-100-F_all_subclass.txt_exprs.txt")
+```
+
+# Create cell estimates
+
+```{r}
+# Import bulkseq expressionset object 
+bulk_seq <- readRDS("/Users/sks36/Desktop/R/mouse_project/MuSiC/methods/inputs/UNC_c58c57_GEX_expressionset.rds")
+
+results_f <- generate_estimates("1-100-F_all_subclass.txt_exprs.txt.rds", "F")
+results_m <- generate_estimates("1-100-M_all_subclass.txt_exprs.txt.rds", "M")
+allen_rds <- readRDS(paste0(inputs, "music_estimate_complete_allen_2.5k_20210223.rds"))
+results_class <- generate_estimates_sexless("music_estimate_complete_allen_2.5k_20210223.rds")
+
+ 
+
+
+pheno_data <- pData(bulk_seq)
+bulkseq_sub <- bulk_seq[, sampleNames(bulk_seq) %in% pheno_data$sample_id]
+print(dim(pheno_data))
+  
+  # Generating estimates
+
+allen_rds <- readRDS(paste0(inputs, "music_estimate_complete_allen_2.5k_20210223.rds"))
+new_pheno_data <- as_tibble(pData(allen_rds))
+
+new_pheno_data <- new_pheno_data %>%
+  dplyr::select(sample_name) %>%
+  left_join(allen_metadata, by = "sample_name")
+
+pData(allen_rds) <- new_pheno_data
+  
+print("reading in the RDS file for the single-cell expression set object")
+
+cell_prop_estimates <- music_prop(bulk.eset = bulkseq_sub, 
+                       sc.eset = allen_rds, 
+                       clusters = 'subclass_label', centered = TRUE, 
+                       iter.max = 4000, normalize = TRUE,
+                       sample = 'external_donor_name_label')
+estimates <- cell_prop_estimates$Est.prop.weighted
+
+# generate_results <- function(section){
+#   temp_f <- as.data.frame(results_f[[section]])
+#   temp_f <- tibble::rownames_to_column(temp_f, var = "sample_id")
+#   temp_f <- temp_f %>%
+#     left_join(pheno_data, by = "sample_id")
+#   temp_m <- as.data.frame(results_m[[section]])
+#   temp_m <- tibble::rownames_to_column(temp_m, var = "sample_id")
+#   temp_m <- temp_m %>%
+#     left_join(pheno_data, by = "sample_id")
+#   final <- bind_rows(temp_f, temp_m)
+#   return(final)
+# }
+
+options(digits=3, scipen = 999)
+pheno_data <- pData(UNC_c58c57_GEX_expressionset)
+
+# Cell proportion estimates
+proportions <- as.data.frame(cell_prop_estimates$Est.prop.weighted)
+proportions <- proportions %>%
+  select_if(Negate(function(col) is.numeric(col) && mean(col) < 0.01)) %>% 
+  tibble::rownames_to_column(var = "sample_id")
+
+proportions_pheno <- proportions %>%
+  left_join(pheno_data, by = "sample_id")
+
+estimates_summary <- proportions_pheno %>%
+  group_by(brain_region, sex, strain) %>%
+  summarize_at(2:9, mean, na.rm = TRUE)
+
+estimates_2 <- as.data.frame(estimates) %>%
+  rownames_to_column("sample_id") %>%
+  left_join(pheno_data, by = "sample_id")
+estimates_summary_2 <- proportions_pheno %>%
+  group_by(brain_region, sex, strain) %>%
+  summarize_at(2:9, mean, na.rm = TRUE)
+
+
+write.table(proportions_pheno, file = paste0(outputs, "MuSiC_2.5k_estimates_pheno_20210224.txt"),
+            sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+
+write.table(estimates_summary, file = paste0(outputs, "MUSIC_2.5k_estimates_summary_20210224.txt"),
+            sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+```
+
+
+
+```{r}
+library(tidyr)
+library(viridis)
+longer_results <- proportions_pheno %>%
+  pivot_longer(2:9, names_to = "cell_type", values_to = "proportion")
+
+longer_results_2 <- results_combined_fm %>%
+  pivot_longer(2:14, names_to = "cell_type", values_to = "proportion")
+
+my_theme <- theme(axis.text.x = element_text(hjust = 1, size = 14, angle = 45, face = "bold"),
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 12, face = "bold"),
+        axis.text.y = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 14, face = "bold"))
+```
+
+# Sex differences between regions / strains
+
+# Strain - Amygdala 
+```{r}
+strain_diff_amy <- ggplot(data = dplyr::filter(longer_results, brain_region == "A"),
+                          aes_string(x = "cell_type", y = "proportion")) +
+  geom_boxplot(alpha = 0.5,
+               aes(color = strain)) +
+  geom_point(aes(color = strain, fill = strain),
+           position = position_dodge(0.8)) + 
+  xlab("") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle("Strain") +
+  labs(subtitle = "Amygdala") +
+  ylim(0, 0.5) +
+  theme_classic() +
+  my_theme +
+  scale_color_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) +
+  scale_fill_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) 
+```
+
+# Strain - Hippocampus 
+```{r}
+strain_diff_hip <- ggplot(data = dplyr::filter(longer_results, brain_region == "H"),
+                          aes_string(x = "cell_type", y = "proportion")) +
+  geom_boxplot(alpha = 0.5,
+               aes(color = strain)) +
+  geom_point(aes(color = strain, fill = strain),
+           position = position_dodge(0.8)) + 
+  xlab("") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle("Strain") +
+  labs(subtitle = "Hippocampus") +
+  ylim(0, 0.5) +
+  theme_classic() +
+  my_theme +
+  scale_color_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) +
+  scale_fill_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) 
+```
+# Social - Amygdala 
+```{r}
+soc_diff_amy <- ggplot(data = dplyr::filter(longer_results, brain_region == "A" &
+                                              strain == "C58J"),
+                          aes_string(x = "cell_type", y = "proportion")) +
+  geom_boxplot(alpha = 0.5,
+               aes(color = sociability)) +
+  geom_point(aes(color = sociability, fill = sociability),
+           position = position_dodge(0.8)) + 
+  xlab("") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle("C58J Sociability") +
+  labs(subtitle = "Amygdala") +
+  ylim(0, 0.5) +
+  theme_classic() +
+  my_theme + 
+  scale_color_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) +
+  scale_fill_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) 
+```
+
+# Social - Hippocampus 
+```{r}
+soc_diff_hip <- ggplot(data = dplyr::filter(longer_results, brain_region == "H" &
+                                              strain == "C58J"),
+                          aes_string(x = "cell_type", y = "proportion")) +
+  geom_boxplot(alpha = 0.5,
+               aes(color = sociability)) +
+  geom_point(aes(color = sociability, fill = sociability),
+           position = position_dodge(0.8)) + 
+  xlab("") +
+  ylab("Estimated Cell-Type Proportion") +
+  ggtitle("C58J Sociability") +
+  labs(subtitle = "Hippocampus") +
+  ylim(0, 0.5) +
+  theme_classic() +
+  my_theme +
+  scale_color_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) +
+  scale_fill_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) 
+```
+
+
+```{r}
+# Combining the sex / region plots ####
+
+library(cowplot)
+
+strain_legend <- get_legend(strain_diff_hip + theme(legend.box.margin = margin(0, 0, 0, 12)))
+social_legend <- get_legend(soc_diff_hip + theme(legend.box.margin = margin(0, 0, 0, 12)))
+
+strain <- plot_grid(
+  strain_diff_amy + theme(legend.position = "none"),
+  strain_diff_hip + theme(legend.position = "none") + ylab(NULL),
+  align = 'hv',
+  labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1
+)
+
+social <- plot_grid(
+  soc_diff_amy + theme(legend.position = "none"),
+  soc_diff_hip + theme(legend.position = "none") + ylab(NULL),
+  align = 'hv',
+  labels = c("C", "D"),
+  hjust = -1,
+  nrow = 1
+)
+
+
+grid_plot <- plot_grid(strain, strain_legend, 
+                       social, social_legend,
+                       nrow = 2,
+                       ncol = 2,
+                       rel_widths = c(1, 0.1))
+
+ggsave(filename = paste0(outputs, "mofa_estimates_strain_sociability_20210302.png"),
+       plot = grid_plot, dpi = 100, width = 10, height = 10, units = "in")
+
+ggsave(filename = paste0(outputs, "20210218_C58_cell_estimates_by_strain_sex_mf.png"),
+       plot = sex_block_2, dpi = 100, width = 18, height = 8, units = "in")
+
+```
+
+
+# FM followup tables & plots
+The FM dataset showed a clear shift towards male estimates when I included the male reference for some but not all cell classes. I want to dig into these to see if they're a result of poor coverage for female cells for a given class, or a legitimate case for sex-specific reference datasets. 
+
+```{r}
+sex_count_table <- allen_metadata_2 %>%
+  group_by(donor_sex_label, subclass_label) %>%
+  count()
+
+individual_count_table <- allen_metadata_2 %>%
+  group_by(donor_sex_label, subclass_label) %>%
+  summarise(unique_individuals = n_distinct(external_donor_name_label))
+
+
+sample_id_m <- read.csv(file = paste0(inputs,"2121985-5000-M_all_subclass.txt"),
+                         col.names = "id")
+sample_id_f <- read.csv(file = paste0(inputs, "2121985-5000-F_all_subclass.txt"),
+                        col.names = "id")
+sample_ids <- bind_rows(sample_id_m, sample_id_f)
+subbed_allen_meta <- filter(allen_metadata_2,
+                            sample_name %in% sample_ids$id)
+
+sampled_sex_count_table <- subbed_allen_meta %>%
+  group_by(donor_sex_label, subclass_label) %>%
+  count()
+
+sampled_individual_count_table <- subbed_allen_meta %>%
+  group_by(donor_sex_label, subclass_label) %>%
+  summarise(unique_individuals = n_distinct(external_donor_name_label))
+
+
+
+
+
+# Plotting the number of cells for each sex in the reference dataset
+cells_by_sex <- ggplot(data = sex_count_table, 
+                       aes_string(x = "subclass_label", y = "n", fill = "donor_sex_label")) +
+  geom_bar(stat='identity', position='dodge', aes(color = donor_sex_label)) +
+  xlab("") +
+  ylab("# Cells") +
+  ggtitle("Total Number of Cells Per Cell-Type by Sex") +
+  labs(subtitle = "") +
+  geom_hline(yintercept = 5000, linetype = "dashed", color = "red") +
+  #ylim() +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 1, size = 14, angle = 45, face = "bold"),
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 16, face = "bold"),
+        axis.text.y = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 14, face = "bold")) +
+  scale_color_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) +
+  scale_fill_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) 
+
+# By unique IDs
+cells_by_individual <- ggplot(data = individual_count_table, 
+                       aes_string(x = "subclass_label", 
+                                  y = "unique_individuals", 
+                                  fill = "donor_sex_label")) +
+  geom_bar(stat='identity', position='dodge', aes(color = donor_sex_label)) +
+  xlab("") +
+  ylab("# Subjects") +
+  scale_y_continuous(breaks=seq(0,30,5)) +
+  ggtitle("Total Number of Subjects Per Cell-Type by Sex") +
+  labs(subtitle = "") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  #ylim() +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 1, size = 14, angle = 45, face = "bold"),
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 16, face = "bold"),
+        axis.text.y = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 14, face = "bold")) +
+  scale_color_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) +
+  scale_fill_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) 
+
+# Plotting sampled cells for each sex 
+subcells_by_sex <- ggplot(data = sampled_sex_count_table, 
+                       aes_string(x = "subclass_label", y = "n", fill = "donor_sex_label")) +
+  geom_bar(stat='identity', position='dodge', aes(color = donor_sex_label)) +
+  xlab("") +
+  ylab("# Cells") +
+  ggtitle("Total Number of Subsampled Cells Per Cell-Type by Sex") +
+  labs(subtitle = "") +
+  #ylim() +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 1, size = 14, angle = 45, face = "bold"),
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 16, face = "bold"),
+        axis.text.y = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 14, face = "bold")) +
+  scale_color_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) +
+  scale_fill_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) 
+
+# By sampled cells by unique IDs
+subcells_by_individual <- ggplot(data = sampled_individual_count_table, 
+                       aes_string(x = "subclass_label", 
+                                  y = "unique_individuals", 
+                                  fill = "donor_sex_label")) +
+  geom_bar(stat='identity', position='dodge', aes(color = donor_sex_label)) +
+  xlab("") +
+  ylab("# Subjects") +
+  scale_y_continuous(breaks=seq(0,30,5)) +
+  ggtitle("Total Number of Subsampled Subjects Per Cell-Type by Sex") +
+  labs(subtitle = "") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  #ylim() +
+  theme_classic() +
+  theme(axis.text.x = element_text(hjust = 1, size = 14, angle = 45, face = "bold"),
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 16, face = "bold"),
+        axis.text.y = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 14, face = "bold")) +
+  scale_color_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) +
+  scale_fill_viridis(discrete = TRUE, option = "D", begin = 0, end = .8) 
+
+# Combining the sex / region plots ####
+# create some space to the left of the legend
+
+cells_plots_1 <- plot_grid(
+  cells_by_sex + theme(legend.position="none"),
+  cells_by_individual + theme(legend.position="none"),
+  align = 'hv',
+  #labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1
+)
+
+cells_plots_2 <- plot_grid(
+  subcells_by_sex + theme(legend.position="none"),
+  subcells_by_individual + theme(legend.position="none"),
+  align = 'hv',
+  #labels = c("A", "B"),
+  hjust = -1,
+  nrow = 1
+)
+
+
+
+legend <- get_legend(cells_by_sex + theme(legend.box.margin = margin(0, 0, 0, 12)))
+cells_plots_1 <- plot_grid(cells_plots_1, legend, rel_widths = c(1, 0.08))
+cells_plots_2 <- plot_grid(cells_plots_2, legend, rel_widths = c(1, 0.08))
+ggsave(filename = paste0(outputs, "20210218_cell_ind_counts_primary.png"),
+       plot = cells_plots_1, dpi = 100, width = 18, height = 8, units = "in")
+
+ggsave(filename = paste0(outputs, "20210218_cell_ind_counts_subset.png"),
+       plot = cells_plots_2, dpi = 100, width = 18, height = 8, units = "in")
+```
+
+
+# Sankey QC pipe
+
+```{r}
+library(patchwork)
+library(hrbrthemes)
+library(circlize)
+library(networkD3)
+
+# Make a connection data frame
+allen_cells <- allen_metadata %>%
+    filter(!is.na(subclass_label)) %>%
+    group_by(subclass_label) %>% count()
+
+final_cells <- subbed_allen_meta %>%
+    filter(!is.na(subclass_label)) %>%
+    group_by(subclass_label) %>% count()
+
+used_cells <- filter(allen_cells, subclass_label %in% subbed_allen_meta$subclass_label)
+
+links <- data.frame(
+  source = c("All Allen Cells", allen_cells$subclass_label) 
+)
+new_cols <- c("source", sprintf("f%02d", seq(1,43)))
+
+links[,new_cols] <- ""
+links[,1] <- c("All Allen Cells", allen_cells$subclass_label)
+links <- links %>%
+  rowwise() %>%
+  mutate(f01 = ifelse(source %in% used_cells$subclass_label, 
+                      "Included", "Excluded")) %>%
+  mutate(f02 = ifelse(source %in% used_cells$subclass_label,
+                      "Final Dataset", ""))
+links[1,2:44] <- as.list(allen_cells$subclass_label)
+
+links_long <- links %>%
+  pivot_longer(2:44, names_to = "target") %>%
+  dplyr::select(-target) %>%
+  filter(value != "") %>%
+  rename("value" = "target")
+
+# now add the values to the df conditionally based on the transfer
+links_long_allen <- links_long %>%
+  filter(source == "All Allen Cells") %>%
+  left_join(allen_cells, by = c("target" = "subclass_label")) %>%
+  rename("n" = "value")
+
+links_long_filter <- links_long %>%
+  filter(target == "Included" | target == "Excluded") %>%
+  left_join(allen_cells, by = c("source" = "subclass_label")) %>%
+  rename("n" = "value")
+
+links_long_final <- links_long %>%
+  filter(target == "Final Dataset") %>%
+  left_join(final_cells, by = c("source" = "subclass_label")) %>%
+  rename("n" = "value")
+
+links_long <- bind_rows(links_long_allen, links_long_filter)
+links_long <- links_long %>%
+  add_row(source = "Included", target = "Final Dataset", value = 84729)
+
+rm(links_long_allen, links_long_filter, links, new_cols, used_cells)
+  
+# From these flows we need to create a node data frame: it lists every entities involved in the flow
+nodes <- data.frame(
+  name=c(as.character(links_long$source), as.character(links_long$target)) %>% 
+    unique()
+)
+
+# With networkD3, connection must be provided using id, not using real name like in the links dataframe.. So we need to reformat it.
+links_long$IDsource <- match(links_long$source, nodes$name)-1 
+links_long$IDtarget <- match(links_long$target, nodes$name)-1
+ 
+color_scale ='d3.scaleOrdinal() .range(["#FDE725FF","#B4DE2CFF","#6DCD59FF","#35B779FF","#1F9E89FF","#26828EFF","#31688EFF","#3E4A89FF","#482878FF","#440154FF"])'
+# Thus we can plot it
+p <- sankeyNetwork(Links = links_long, Nodes = nodes, Source = "IDsource",
+              Target = "IDtarget", Value = "value", iterations = 10,
+              NodeID = "name", colourScale = color_scale,
+              sinksRight = TRUE, nodeWidth = 60, margin = 10, fontSize = 60, 
+              nodePadding = 35, units = "cells", height = 2000, 
+              width = 4000)
+p
+
+# save the widget
+library(htmlwidgets)
+saveWidget(p, file=paste0(outputs, "sankeycells.html"))
+
+library(webshot2)
+webshot(paste0(outputs, "sankeycells.html"), 
+        paste0(outputs,"sankeycells.png"), 
+        delay = 2, vwidth = 4000, vheight = 2000, cliprect = "viewport")
+
+```
+
+
+```{r}
+library(multiClust)
+```
+
+# Fucking make a table
+```{r}
+library(gt)
+library(webshot)
+
+options(digits = 3, scipen = 999)
+
+# Making a table of the cell counts for the Allen Reference dataset ####
+
+allen_estimates_male_a <- estimates_summary_2 %>%
+  filter(sex == "M" & brain_region == "a") 
+
+allen_estimates_female_a <- estimates_summary_2 %>%
+  filter(sex == "F" & brain_region == "a") 
+
+allen_estimates_male_h <- estimates_summary_2 %>%
+  filter(sex == "M" & brain_region == "h") 
+
+allen_estimates_female_h <- estimates_summary_2 %>%
+  filter(sex == "F" & brain_region == "h") 
+
+
+
+allen_estimates_2 <- full_join(allen_estimates_female, allen_estimates_male) %>%
+  arrange(strain)
+allen_estimates_final <- t(allen_estimates_2)
+
+library(gt)
+
+allen_estimates_table <- allen_estimates_2 %>% 
+  gt(groupname_col = "strain", auto_align = TRUE) %>%
+  tab_style(style = list(cell_text(weight = "bold")),
+            locations = cells_column_labels(everything())) %>%
+  opt_table_lines(extent = "default") %>%
+  tab_header(
+    title = md("Neuronal Cell Proportion Estimates")) %>%
+  # tab_spanner(label = "Females",
+  #             columns = 3:8) %>%
+  # tab_spanner(label = "Males",
+  #             columns = 9:14) %>%
+  cols_label(brain_region = "Brain Region",
+             sex = "Sex",
+             strain = "Strain") %>%
+  tab_options(
+    column_labels.border.top.color = "black",
+    column_labels.border.top.width = px(0),
+    column_labels.border.bottom.color = "black",
+    table_body.hlines.color = "white",
+    table.border.bottom.color = "white",
+    table.border.bottom.width = px(0),
+    data_row.padding = px(0),
+    column_labels.font.size = 12,
+    table.font.size = 10,
+    column_labels.font.weight = "bold",
+    row_group.background.color = "black",
+    row.striping.include_table_body = TRUE,
+    row.striping.background_color = "#eaeaea"
+    #table.font.size = 2
+    #container.width = px(1400),
+    #row_group.padding = px(-3)
+    
+    #container.height = pct(100)
+  )
+
+
+gtsave(allen_estimates_table, 
+       filename = "allen_cell_prop_table.png", 
+       path = "/Users/sks36/Desktop/R/mouse_project/MuSiC/subclass_estimates/outputs")
+
+
+# Making a table of the cell cell estimate results ####
+
+results_table <- results_combined %>%
+  dplyr::select(sample_id, strain, brain_region, sex, sociability, 2:14)
+
+results_table <- results_table[1:20,] %>% 
+  gt(auto_align = TRUE) %>%
+  #cols_width(vars("Global AF") ~ pct(10),
+  #           vars("Association") ~ pct(60)) %>%
+  tab_style(style = list(cell_text(weight = "bold")),
+            locations = cells_column_labels(everything())) %>%
+  #tab_style(style = list(cell_fill(color = "#b1fffb")),
+  #          locations = cells_body(rows = c(5,16,34,38))) %>%
+  opt_table_lines(extent = "default") %>%
+  tab_header(
+    title = md("MuSiC Results Table")) %>%
+  #tab_spanner(label = "Females",
+  #            columns = 3:8) %>%
+  # tab_spanner(label = "Males",
+  #             columns = 9:14) %>%
+  # cols_label(subclass_label = "cell classification",
+  #            total_m = "total",
+  #            mean_m = "mean",
+  #            sd_m = "sd",
+  #            min_m = "min",
+  #            max_m = "max",
+  #            'n mice m' = "n mice") %>%
+  tab_options(
+    column_labels.border.top.color = "black",
+    column_labels.border.top.width = px(0),
+    column_labels.border.bottom.color = "black",
+    table_body.hlines.color = "white",
+    table.border.bottom.color = "white",
+    table.border.bottom.width = px(0),
+    data_row.padding = px(0),
+    column_labels.font.size = 12,
+    table.font.size = 10,
+    column_labels.font.weight = "bold",
+    row_group.background.color = "black",
+    row.striping.include_table_body = TRUE,
+    row.striping.background_color = "#eaeaea"
+    #table.font.size = 2
+    container.width = px(1200)
+    #row_group.padding = px(-3)
+    
+    #container.height = pct(100)
+  )
+
+
+gtsave(results_table, 
+       filename = "20210219_MuSiC_short_results_table.png", 
+       path = outputs)
+
+
+```
+
