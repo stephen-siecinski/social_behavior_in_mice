@@ -19,6 +19,6 @@ This project aimed to identify genes that were differentially expressed in the a
 
 ## Summary results
 
-A heatmap depicting the 48 samples included in the differential expression analyses. Pictured are the top 200 differentially expressed genes between strains. 
+A heatmap depicting the 24 samples included in the differential expression analyses of the hippocampus. Pictured are the top 200 differentially expressed genes between strains. 
 
 ![](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/rna-seq/c58-b6_heatmap_hippocampus_protein-coding_20210226.png?raw=true)
