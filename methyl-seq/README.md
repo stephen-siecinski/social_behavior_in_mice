@@ -21,3 +21,8 @@ This project aimed to identify genes that were differentially methylated in the 
 A representative plot depicting a differentially methylated region in the hippocampus between C57BL/6J and C58/J mice. 
 
 <img src="https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/dmr.png" width="800">
+
+
+Euclidean clustering of hippocampus brain samples based on differentially methylated CpG sites.
+
+<img src="https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/mouse_methyl_cluster.png" width="1000">
