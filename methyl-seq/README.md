@@ -11,10 +11,14 @@ This project aimed to identify genes that were differentially methylated in the 
 - Differential methylation analysis (RNbeads \ DMRseq, R)
 
 ## Description of contents
-- [bismark_pipeline.sh](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/bismark_pipeline.sh):
-- [RNbeads-runconfig.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/RNbeads-runconfig.Rmd):
-- [RNbeads_interpretation_visualization.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/RNbeads_interpretation_visualization.Rmd):
-- [dmr-seq.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/dmr-seq.Rmd):
+- [bismark_pipeline.sh](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/bismark_pipeline.sh)
+  - Processes raw FASTQ files. Filters reads based on phred score, size, error rate, performs multi-QC to evaluate sequencing quality, aligns to the bisulfite-converted mouse reference genome (GRCm38). CpG, CpH, CHH methylation estimates generated using Bismark Methylation Extractor.
+- [RNbeads-runconfig.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/RNbeads-runconfig.Rmd)
+  - Performs an array of post-alignment QC, qualitative visualizations, and position / region-specific analyses of differential methylation. 
+- [RNbeads_interpretation_visualization.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/RNbeads_interpretation_visualization.Rmd)
+  - Additional visualizations of the output dataframes from the RNbeads pipeline
+- [dmr-seq.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/dmr-seq.Rmd)
+  - An algorithm that uses regional smoothing and permutation-based statistical tests to identify differentially methylated regions between experimental groups. 
 
 ## Summary results
 
