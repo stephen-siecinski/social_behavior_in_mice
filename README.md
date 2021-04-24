@@ -13,4 +13,4 @@ The analyses are dived into three primary directories corresponding to distinct 
 
 ## Experimental Scheme
 
-![](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/experimental_summary.png?v=4&s=200)
+![](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/experimental_summary.png?s=40)
