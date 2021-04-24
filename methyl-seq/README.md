@@ -2,7 +2,7 @@
 
 ## Background 
 
-This project aimed to identify genes that were differentially methylated in the amygdala and hippocampus between two closely related inbred mouse strains, and between social strata of an idiopathic mouse model for autism spectrum disorder. DNA was extracted from tissue punches of the respective regions and libraries were generated using the Agilent SureSelect target-enrichment protocol and sequenced on a NovaSeq 6000 S3 full flowcell. 
+This project aimed to identify genes that were differentially methylated in the amygdala and hippocampus between two closely related inbred mouse strains, and between social strata of an idiopathic mouse model for autism spectrum disorder. DNA was extracted from tissue punches of the respective regions and libraries were generated using the Agilent SureSelect XT target-enrichment protocol and sequenced on a NovaSeq S1 full flowcell. 
 
 #### Overall workflow
 - QC-filtering/adapter trimming (cutadapt, FASTQC, bash)
