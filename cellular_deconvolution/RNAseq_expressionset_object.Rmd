@@ -1,0 +1,591 @@
+---
+title: "Making an expression-set object for MuSiC"
+output: html_notebook
+---
+
+Combine the counts matrix and the phenotype data from the DESeq2 pipeline into a bioconductor expressionset object so that it can be used in the MuSiC cell deconvolution package. I'll also have to make sure that the single cell datasets available from Allen are appropriately formatted (and that they provide raw read counts). 
+
+```{r}
+library(dplyr)
+library(janitor)
+library(stringr)
+library(vroom)
+library(Biobase)
+
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+```
+
+
+# Read in the DESeq2 files
+```{r}
+counts_matrix <- read.csv(paste0(inputs, "deseq_counts_matrix.txt"), sep = "\t")
+pheno_data <- read.csv(paste0(inputs, "deseq_phenodata.txt"), sep = "\t")
+```
+
+## Begin assembling the expressionset object
+Following the manual 
+https://www.bioconductor.org/packages/release/bioc/vignettes/Biobase/inst/doc/ExpressionSetIntroduction.pdf
+
+### Creating the minimal expressionset object
+
+```{r}
+# The allen dataset uses gene symbols instead of ensembl IDS. Need to convert those first. 
+# Set up BiomaRt
+
+library(biomaRt)
+ensembl <- useEnsembl(biomart = "ensembl")
+mart <- useDataset("mmusculus_gene_ensembl", useMart("ensembl"))
+
+get_gene_symbol <- function(x){
+  print("Retrieving gene symbols from Ensembl")
+  temp_glist <- getBM(filters = "ensembl_gene_id", 
+                      attributes = c("ensembl_gene_id", "mgi_symbol"),
+                      values = x$gene_id, mart = mart)
+  temp_gene_annotation <- getBM(filters = "ensembl_gene_id",
+                                attributes = c("ensembl_gene_id", "gene_biotype"),
+                                values = x$gene_id, mart = mart)
+  temp_glist <- temp_glist %>% as_tibble()
+  temp_glist <- temp_glist %>% distinct(ensembl_gene_id, .keep_all = TRUE)
+  temp_gene_annotation <- temp_gene_annotation %>% as_tibble()
+  temp_gene_annotation <- temp_gene_annotation %>% distinct(ensembl_gene_id, .keep_all = TRUE)
+  temp_genes <- left_join(x, temp_glist, by = c("gene_id" = "ensembl_gene_id"))
+  temp_genes <- left_join(temp_genes, temp_gene_annotation, by = c("gene_id" = "ensembl_gene_id"))
+  print("ID conversion complete")
+  temp_genes <- mutate(temp_genes, gene = ifelse(!is.na(mgi_symbol) == TRUE & mgi_symbol != "",
+                                              mgi_symbol, gene_id))
+return(temp_genes)
+}
+
+counts_matrix_2 <- get_gene_symbol(counts_matrix)
+
+counts_matrix_3 <- counts_matrix_2 %>%
+  dplyr::select(-gene_id, -gene_biotype, -gene) %>%
+  relocate(mgi_symbol)
+counts_matrix_3 <- counts_matrix_3 %>%
+  filter(mgi_symbol %in% allen_genes$`colnames(unisex_exprs_matrix)`)
+counts_matrix_3 <- counts_matrix_3[!duplicated(counts_matrix_3$mgi_symbol),]
+counts_matrix_3 <- counts_matrix_3 %>%
+  filter(!is.na(mgi_symbol))
+counts_symbols <- as.data.frame(counts_matrix_3$mgi_symbol)
+rownames(counts_matrix_3) <- counts_matrix_3$mgi_symbol
+counts_matrix_3 <- counts_matrix_3 %>%
+  dplyr::select(-mgi_symbol)
+
+rna_exprs_mat <- as.matrix(counts_matrix_3)
+class(rna_exprs_mat)
+
+dim(rna_exprs_mat)
+head(colnames(rna_exprs_mat))
+head(rownames(rna_exprs_mat))
+```
+
+### Adding phenotype data
+
+```{r}
+pheno_data_2 <- pheno_data
+rownames(pheno_data_2) <- pheno_data_2$sample_id
+head(rownames(pheno_data_2))
+dim(pheno_data_2)
+
+all(rownames(pheno_data_2) == colnames(rna_exprs_mat)) # True
+```
+### Adding meta-data
+
+```{r}
+metadata <- data.frame(labelDescription = c("mouse_id", "sex of the mouse",
+                                            "Type of inbred mouse strain, C57BL6/J or C58/J",
+                                            "Determined by measuring the duration of time spent in close proximity to another mouse during the three-chamber test",
+                                            "Batch of the RNA extraction prior to sequencing",
+                                            "Region identified using a steel brain matrix and reference landmarks, hippocampus or amygdala",
+                                            "Nanograms of RNA per microliter as measured via qubit broad range assay",
+                                            "spectrophotometer ratio measuing the presence of contaminants, typically cellular material that was not properly cleaned",
+                                            "spectrophotometer ratio measuring the presence of contaminants, typically guanidine with the Qiagen extraction kit used",
+                                            "RIN score as measured on a Thermo tape station broad range tape"),
+                       row.names = colnames(pheno_data_2))
+
+pheno_data <- new("AnnotatedDataFrame", data = pheno_data_2)
+pheno_data
+head(pData(pheno_data))
+```
+
+### Adding additional information
+```{r}
+experimentData <- new("MIAME",
+                  name="Stephen Siecinski",
+                  lab="Gregory Lab",
+                  contact="stephen.siecinski@duke.edu",
+                  title="Amygdala & Hippocampus of C58J & C57BL6 mice")
+```
+
+### Assembling the expressionset object
+```{r}
+bulk_exprset <- ExpressionSet(assayData = rna_exprs_mat,
+                         phenoData = pheno_data, 
+                         rotocolData = metadata,
+                         experimentData = experimentData)
+bulk_exprset
+rm(counts_matrix, experimentData, metadata, minimalSet, pheno_data, rna_exprs_mat,
+   ensembl, gene_symbols, genes, mart, pheno_data_2, counts_matrix_2)
+gc()
+
+saveRDS(bulk_exprset, file = paste0(outputs, "UNC_c58c57_GEX_expressionset.rds"))
+```
+
+# Now doing the same with the data available from Allen
+https://portal.brain-map.org/atlases-and-data/rnaseq/mouse-whole-cortex-and-hippocampus-10x
+
+The required files were downloaded directly to the remote unix machine using wget and the following links
+
+The counts matrix
+
+- https://idk-etl-prod-download-bucket.s3.amazonaws.com/aibs_mouse_ctx-hip_10x/matrix.csv
+
+The metadata
+
+- https://brainmapportal-live-4cc80a57cd6e400d854-f7fdcae.divio-media.net/filer_public/d2/de/d2de8185-2ee8-470c-91ef-29c89c2047bb/taxonomy.txt
+
+## Read in files from Allen
+```{r}
+library(dplyr)
+library(janitor)
+library(stringr)
+library(vroom)
+library(Biobase)
+
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+inputs
+# [1] "/dmpi/analysis/SGregory/steve/unc_mouse_collaboration/RNA-seq/cellular_deconvolution/inputs/"
+outputs
+# [1] "/dmpi/analysis/SGregory/steve/unc_mouse_collaboration/RNA-seq/cellular_deconvolution/outputs/"
+```
+
+
+The cell-level expression matrix is too large to load into R, the machine automatically kills the process as it begins to suck up too much memory. Looking through the metadata to find a variable that I can filter and subset on. 
+
+```{r}
+allen_metadata <- read.csv(paste0(inputs, "allen_files/metadata.csv"))
+colnames(allen_metadata)
+allen_metadata <- allen_metadata %>%
+  dplyr::select(sample_name, donor_sex_label, external_donor_name_label,
+         class_label, subclass_label)
+allen_metadata_narm <- na.omit(allen_metadata)
+
+# MuSiC initially errored out due to NAs in the metadata table 
+colSums(is.na(allen_metadata))
+
+# All of the annotations in the metadata
+colnames(allen_metadata)
+
+#### What annotations are in the subclass_label? 
+
+unique(allen_metadata$subclass_label)
+
+nrow(as.data.frame(unique(allen_metadata$external_donor_name_label)))
+# 49 mice in the data 
+
+dim(allen_metadata)
+# 1093036       5
+```
+
+## Identifying subset dataframe
+```{r}
+sample_breakdown_by_sex <- dplyr::count(allen_metadata, donor_sex_label, external_donor_name_id)
+write.table(sample_breakdown_by_sex, 
+            file = paste0(outputs, "allen_sample_sex_breakdown.csv"),
+            row.names = FALSE, quote = FALSE,
+            sep = "\t")
+rm(sample_breakdown_by_sex)
+```
+
+
+## Visualize mouse cell distribution
+```{r}
+cell_props <- vroom(paste0(outputs, "allen_sample_sex_breakdown.csv"))
+hist(filter(cell_props, donor_sex_label == "F")$n)
+hist(filter(cell_props, donor_sex_label == "M")$n)
+rm(cell_props)
+```
+
+# Looking at the number of cells represented
+
+```{r}
+cell_counts <- data.frame(unclass(table(allen_metadata$class_label))) %>%
+  add_rownames(var = "cell_type") %>% 
+  rename("count" = "unclass.table.allen_metadata.class_label..") %>%
+  arrange(desc(count))
+
+sum(cell_counts$count)
+
+
+write.table(cell_counts, file = paste0(outputs,"allen_total_cell_counts_class.txt"),
+            quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+rm(cell_counts)
+```
+
+## Generating list of subset IDs by class 
+
+There are... 
+
+- Glutamatergic: 909541
+- GABAergic: 166968
+- Non-Neuronal: 12513
+
+I want 15,000 cells across the three classes to estimate proportions. 
+
+```{r}
+# Curious how the distribution of class looks
+glut_mouse_dist <- allen_metadata %>%
+  filter(class_label == "Glutamatergic") %>%
+  group_by(class_label, external_donor_name_id) %>%
+  tally() %>%
+  rowwise() %>%
+  mutate(overall_proportion = n / sum(glut_mouse_dist$n))
+
+gaba_mouse_dist <- allen_metadata %>%
+  filter(class_label == "GABAergic") %>%
+  group_by(class_label, external_donor_name_id) %>%
+  tally()
+
+nonneruo_mouse_dist <- allen_metadata %>%
+  filter(class_label == "Non-Neuronal") %>%
+  group_by(class_label, external_donor_name_id) %>%
+  tally()
+
+# Now lets sample our IDs. We want 5000 from each category. 
+# sample_n will sample that number from each group, so it will be limited by the mouse with the smallest number of cells in the dataset. 
+
+# Given that, I can go about this two ways. Sample sorted by group and adjust the amount to hit the approximate target number 
+
+glut_mouse_sample <- allen_metadata %>%
+  filter(class_label == "Glutamatergic") %>%
+  group_by(external_donor_name_id) %>%
+  sample_n(102)
+
+glut_mouse_sample_dist <- glut_mouse_sample %>%
+  filter(class_label == "Glutamatergic") %>%
+  group_by(class_label, external_donor_name_id) %>%
+  tally()
+
+# Or forget grouping by mouse ID and just sample 5,000 randomly
+glut_mouse_sample_2 <- allen_metadata %>%
+  filter(class_label == "Glutamatergic") %>% 
+  sample_n(5000)
+
+glut_mouse_sample_dist_2 <- glut_mouse_sample_2 %>%
+  filter(class_label == "Glutamatergic") %>%
+  group_by(class_label, external_donor_name_id) %>%
+  tally()
+
+# Determine if the numerical variation is a direct consequence of proportion of total cells
+glut_mouse_sample_dist <- glut_mouse_sample_dist %>%
+  rowwise() %>%
+  mutate(samp_proportion = n / sum(glut_mouse_sample_dist$n)) %>%
+  left_join(glut_mouse_dist, by = "external_donor_name_id") %>% 
+  mutate(proportion_difference = as.numeric(format((overall_proportion - samp_proportion), 
+                                        digits = 1)))
+
+glut_mouse_sample_dist_2 <- glut_mouse_sample_dist_2 %>%
+  rowwise() %>%
+  mutate(samp_proportion = n / sum(glut_mouse_sample_dist_2$n)) %>%
+  left_join(glut_mouse_dist, by = "external_donor_name_id") %>% 
+  mutate(proportion_difference = as.numeric(format((overall_proportion - samp_proportion), 
+                                        digits = 1)))
+
+barplot(glut_mouse_sample_dist$proportion_difference)
+barplot(glut_mouse_sample_dist_2$proportion_difference)
+
+# I think I'm happy with the second approach. While it's not as evenly distributed across samples, there are likely more diverse populations in the samples with high cell counts, and those would be more representative and generalizable. 
+
+glut_sample_cell_ids <- as.data.frame(glut_mouse_sample_2$sample_name)
+write.table(glut_sample_cell_ids, file = paste0(outputs, "glut_cells.txt"),
+            quote = FALSE, row.names = FALSE, sep = "\t")
+
+rm(glut_mouse_dist, gaba_mouse_dist, nonneruo_mouse_dist, glut_mouse_sample,
+   glut_mouse_sample_dist, glut_mouse_sample_2, glut_mouse_sample_dist_2,
+   glut_mouse_sample_2, glut_sample_cell_ids)
+gc()
+```
+
+## Repeat the process for the gaba and non-neuronal cells
+
+```{r}
+# Sample 5000 Glut cells from males and females
+glut_cell_sample_m <- allen_metadata %>%
+  filter(class_label == "Glutamatergic" & donor_sex_label == "M") %>% 
+  sample_n(5000)
+glut_cell_sample_ids_m <- as.data.frame(glut_cell_sample_m$sample_name)
+write.table(glut_cell_sample_ids_m, 
+            file = paste0(outputs, "glut_cell_ids_m.txt"),
+            quote = FALSE, row.names = FALSE, sep = "\t")
+rm(glut_cell_sample_m, glut_cell_sample_ids_m)
+
+glut_cell_sample_f <- allen_metadata %>%
+  filter(class_label == "Glutamatergic" & donor_sex_label == "F") %>% 
+  sample_n(5000)
+glut_cell_sample_ids_f <- as.data.frame(glut_cell_sample_f$sample_name)
+write.table(glut_cell_sample_ids_f, 
+            file = paste0(outputs, "glut_cell_ids_f.txt"),
+            quote = FALSE, row.names = FALSE, sep = "\t")
+rm(glut_cell_sample_f, glut_cell_sample_ids_f)
+
+# Sample 5000 gaba cells from males and females
+gaba_cell_sample_m <- allen_metadata %>%
+  filter(class_label == "GABAergic" & donor_sex_label == "M") %>% 
+  sample_n(5000)
+gaba_cell_sample_ids_m <- as.data.frame(gaba_cell_sample_m$sample_name)
+write.table(gaba_cell_sample_ids_m, 
+            file = paste0(outputs, "gaba_cell_ids_m.txt"),
+            quote = FALSE, row.names = FALSE, sep = "\t")
+rm(gaba_cell_sample_m, gaba_cell_sample_ids_m)
+
+gaba_cell_sample_f <- allen_metadata %>%
+  filter(class_label == "GABAergic" & donor_sex_label == "F") %>% 
+  sample_n(5000)
+gaba_cell_sample_ids_f <- as.data.frame(gaba_cell_sample_f$sample_name)
+write.table(gaba_cell_sample_ids_f, 
+            file = paste0(outputs, "gaba_cell_ids_f.txt"),
+            quote = FALSE, row.names = FALSE, sep = "\t")
+rm(gaba_cell_sample_f, gaba_cell_sample_ids_f)
+
+
+# Sample 5000 non-neuronal cells from males and females
+nonneuro_cell_sample_m <- allen_metadata %>%
+  filter(class_label == "Non-Neuronal" & donor_sex_label == "M") %>% 
+  sample_n(5000)
+nonneuro_cell_sample_ids_m <- as.data.frame(nonneuro_cell_sample_m$sample_name)
+write.table(nonneuro_cell_sample_ids_m, 
+            file = paste0(outputs, "nonneuro_cell_ids_m.txt"),
+            quote = FALSE, row.names = FALSE, sep = "\t")
+rm(nonneuro_cell_sample_m, nonneuro_cell_sample_ids_m)
+
+
+nonneuro_cell_sample_f <- allen_metadata %>%
+  filter(class_label == "Non-Neuronal" & donor_sex_label == "F") %>% 
+  sample_n(5000)
+nonneuro_cell_sample_ids_f <- as.data.frame(nonneuro_cell_sample_f$sample_name)
+write.table(nonneuro_cell_sample_ids_f, 
+            file = paste0(outputs, "nonneuro_cell_ids_f.txt"),
+            quote = FALSE, row.names = FALSE, sep = "\t")
+rm(nonneuro_cell_sample_f, nonneuro_cell_sample_ids_f)
+
+
+```
+
+# Generating the Allen Expression Set Objects
+
+## Males and females combined
+Generating this out of curiosity. Miko and Simon will likely find it interesting to see how sex impacts the estimates for the mice. 
+
+```{r}
+glut_matrix <- read.csv(paste0(inputs, "glut_subsample.csv"))
+gaba_matrix <- read.csv(paste0(inputs, "gaba_subsample.csv"))
+nonneuro_matrix <- read.csv(paste0(inputs, "nonneuro_subsample.csv"))
+unisex_exprs_matrix <- bind_rows(glut_matrix, gaba_matrix, nonneuro_matrix)
+head(colnames(unisex_exprs_matrix), 5)
+
+allen_genes <- as.data.frame(colnames(unisex_exprs_matrix))
+overlap_genes <- as.data.frame(intersect(allen_genes$`colnames(unisex_exprs_matrix)`, 
+                           counts_symbols$`counts_matrix_3$mgi_symbol`))
+
+unisex_exprs_matrix_2 <- unisex_exprs_matrix %>%
+  arrange(sample_name)
+rm(glut_matrix, gaba_matrix, nonneuro_matrix)
+gc()
+### Creating the minimal expressionset object
+
+convert_to_matrix <- function(x){
+  rownames(x) <- x$sample_name
+  x <- x %>%
+    dplyr::select(!sample_name)
+  x <- as.matrix(x) # Comment this out for pheno_data
+}
+
+unisex_exprs_matrix_3 <- convert_to_matrix(unisex_exprs_matrix_2)
+
+class(unisex_exprs_matrix_3)
+# [1] "matrix" "array" 
+dim(unisex_exprs_matrix_3)
+# [1] 15000 31053
+head(colnames(unisex_exprs_matrix_3, 5))
+head(rownames(unisex_exprs_matrix_3, 5))
+
+# We need to transpose the expression matrix so that the column names are the cell IDs and the row names are the genes. 
+
+unisex_exprs_matrix_3 <- t(unisex_exprs_matrix_3)
+dim(unisex_exprs_matrix_3)
+# 1] 31053 15000
+head(colnames(unisex_exprs_matrix_3, 5))
+head(rownames(unisex_exprs_matrix_3, 5))
+
+# Pheno data
+
+# Need to subset the metadata to cell IDs that are in the expression matrix
+allen_metadata_2 <- allen_metadata %>%
+  filter(sample_name %in% colnames(unisex_exprs_matrix_3)) %>%
+  arrange(sample_name)
+
+allen_metadata_2 <- as.data.frame(allen_metadata_2)
+rownames(allen_metadata_2) <- allen_metadata_2$sample_name
+
+dim(allen_metadata_2)
+# [1] 1093036      57
+head(colnames(allen_metadata_2, 5))
+head(rownames(allen_metadata_2, 5))
+
+all(rownames(allen_metadata_2) == colnames(unisex_exprs_matrix_3)) # TRUE
+
+allen_unisex_metadata <- new("AnnotatedDataFrame", data = allen_metadata_2)
+```
+
+### Assembling the expressionset object
+
+```{r}
+allen_exprset_unisex <- ExpressionSet(assayData = unisex_exprs_matrix_3,
+                         phenoData = allen_unisex_metadata)
+rm(allen_metadata_2, allen_unisex_metadata, unisex_exprs_matrix, unisex_exprs_matrix_2, unisex_exprs_matrix_3)
+gc()
+
+saveRDS(allen_exprset_unisex, file = paste0(outputs, "allen_exprset_unisex.rds"))
+```
+
+
+## Females only
+Generating this out of curiosity. Miko and Simon will likely find it interesting to see how sex impacts the estimates for the mice. 
+
+```{r}
+glut_matrix <- read.csv(paste0(inputs, "glut_subsample_f.csv"))
+gaba_matrix <- read.csv(paste0(inputs, "gaba_subsample_f.csv"))
+nonneuro_matrix <- read.csv(paste0(inputs, "nonneurosubsample_f.csv"))
+exprs_matrix <- bind_rows(glut_matrix, gaba_matrix, nonneuro_matrix)
+exprs_matrix_2 <- exprs_matrix %>%
+  arrange(sample_name)
+rm(glut_matrix, gaba_matrix, nonneuro_matrix)
+gc()
+### Creating the minimal expressionset object
+
+convert_to_matrix <- function(x){
+  rownames(x) <- x$sample_name
+  x <- x %>%
+    select(!sample_name)
+  #x <- as.matrix(x) # Comment this out for pheno_data
+}
+
+exprs_matrix_2 <- convert_to_matrix(exprs_matrix_2)
+class(exprs_matrix_2)
+# [1] "matrix" "array" 
+dim(exprs_matrix_2)
+# [1] 15000 31053
+head(colnames(exprs_matrix_2, 5))
+head(rownames(exprs_matrix_2, 5))
+
+# We need to transpose the expression matrix so that the column names are the cell IDs and the row names are the genes. 
+
+exprs_matrix_3 <- t(exprs_matrix_2)
+dim(exprs_matrix_3)
+# 1] 31053 15000
+head(colnames(exprs_matrix_3, 5))
+head(rownames(exprs_matrix_3, 5))
+
+# Pheno data
+
+# Need to subset the metadata to cell IDs that are in the expression matrix
+allen_metadata_2 <- allen_metadata %>%
+  filter(sample_name %in% colnames(exprs_matrix_3)) %>%
+  arrange(sample_name)
+
+allen_metadata_2 <- as.data.frame(allen_metadata_2)
+
+allen_metadata_3 <- convert_to_matrix(allen_metadata_2)
+
+dim(allen_metadata_3)
+# [1] 1093036      57
+head(colnames(allen_metadata_3, 5))
+head(rownames(allen_metadata_3, 5))
+
+all(rownames(allen_metadata_3) == colnames(exprs_matrix_3)) # TRUE
+
+allen_metadata <- new("AnnotatedDataFrame", data = allen_metadata_3)
+```
+
+### Assembling the expressionset object
+
+```{r}
+allen_exprset_females <- ExpressionSet(assayData = exprs_matrix_3,
+                         phenoData = allen_metadata)
+rm(allen_metadata_2, allen_metadata_3, exprs_matrix, exprs_matrix_2, exprs_matrix_3)
+gc()
+
+saveRDS(allen_exprset_unisex, file = paste0(outputs, "allen_exprset_females.rds"))
+```
+
+## Males only
+Generating this out of curiosity. Miko and Simon will likely find it interesting to see how sex impacts the estimates for the mice. 
+
+```{r}
+glut_matrix <- read.csv(paste0(inputs, "glut_subsample_m.csv"))
+gaba_matrix <- read.csv(paste0(inputs, "gaba_subsample_m.csv"))
+nonneuro_matrix <- read.csv(paste0(inputs, "nonneurosubsample_m.csv"))
+exprs_matrix <- bind_rows(glut_matrix, gaba_matrix, nonneuro_matrix)
+exprs_matrix_2 <- exprs_matrix %>%
+  arrange(sample_name)
+rm(glut_matrix, gaba_matrix, nonneuro_matrix)
+gc()
+### Creating the minimal expressionset object
+
+convert_to_matrix <- function(x){
+  rownames(x) <- x$sample_name
+  x <- x %>%
+    select(!sample_name)
+  #x <- as.matrix(x) # Comment this out for pheno_data
+}
+
+exprs_matrix_2 <- convert_to_matrix(exprs_matrix_2)
+class(exprs_matrix_2)
+# [1] "matrix" "array" 
+dim(exprs_matrix_2)
+# [1] 15000 31053
+head(colnames(exprs_matrix_2, 5))
+head(rownames(exprs_matrix_2, 5))
+
+# We need to transpose the expression matrix so that the column names are the cell IDs and the row names are the genes. 
+
+exprs_matrix_3 <- t(exprs_matrix_2)
+dim(exprs_matrix_3)
+# 1] 31053 15000
+head(colnames(exprs_matrix_3, 5))
+head(rownames(exprs_matrix_3, 5))
+
+# Pheno data
+
+# Need to subset the metadata to cell IDs that are in the expression matrix
+allen_metadata_2 <- allen_metadata %>%
+  filter(sample_name %in% colnames(exprs_matrix_3)) %>%
+  arrange(sample_name)
+
+allen_metadata_2 <- as.data.frame(allen_metadata_2)
+
+allen_metadata_3 <- convert_to_matrix(allen_metadata_2)
+
+dim(allen_metadata_3)
+# [1] 1093036      57
+head(colnames(allen_metadata_3, 5))
+head(rownames(allen_metadata_3, 5))
+
+all(rownames(allen_metadata_3) == colnames(exprs_matrix_3)) # TRUE
+
+allen_metadata <- new("AnnotatedDataFrame", data = allen_metadata_3)
+```
+
+### Assembling the expressionset object
+
+```{r}
+allen_exprset_males <- ExpressionSet(assayData = exprs_matrix_3,
+                         phenoData = allen_metadata)
+rm(allen_metadata_2, allen_metadata_3, exprs_matrix, exprs_matrix_2, exprs_matrix_3)
+saveRDS(allen_exprset_unisex, file = paste0(outputs, "allen_exprset_males.rds"))
+
+rm(list = ls())
+gc()
+```
