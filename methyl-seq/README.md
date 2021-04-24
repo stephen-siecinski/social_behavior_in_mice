@@ -18,4 +18,4 @@ This project aimed to identify genes that were differentially methylated in the 
 
 ## Summary results
 
-
+<img src="https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/dmr.png" width="500">
