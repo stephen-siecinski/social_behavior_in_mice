@@ -25,4 +25,4 @@ A representative plot depicting a differentially methylated region in the hippoc
 
 Euclidean clustering of hippocampus brain samples based on differentially methylated CpG sites.
 
-<img src="https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/mouse_methyl_cluster.png" width="1000">
+<img src="https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/mouse_methyl_cluster.png" width="800">
