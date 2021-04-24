@@ -14,5 +14,6 @@ This project aimed to identify genes that were differentially expressed in the a
 
 ## Description of contents
 - C58_C57_expanded_models_results.Rmd
+- fGSEA_rnaseq.Rmd
 - DESeq2_heatmaps.Rmd
 
