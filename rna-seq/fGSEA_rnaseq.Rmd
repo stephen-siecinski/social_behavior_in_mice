@@ -1,0 +1,296 @@
+---
+title: "fGSEA for UNC RNA-seq data"
+output: html_notebook
+---
+
+## Packages
+```{r}
+library(dplyr)
+library(ggplot2)
+library(vroom)
+library(GEOquery)
+library(fgsea)
+library(data.table)
+library(tidyverse)
+library(msigdbr)
+library(viridis)
+```
+
+https://stephenturner.github.io/deseq-to-fgsea/#non-human_organisms
+
+```{r}
+# Simple function to import DESeq2 results files and process for fGSEA
+
+import <- function(file){ 
+  temp <- vroom(paste0(inputs, file)) %>%
+  dplyr::select(gene, stat) %>% 
+  na.omit() %>% 
+  group_by(gene) %>% 
+  summarize(stat=mean(stat))
+
+  return(temp)
+}
+
+
+# Function to run fGSEA and export results to tables / ES figures
+
+run_gsea <- function(input_genes, cat, sub_cat, plot_title, out_dir){
+  input_genes_clean <- input_genes %>% 
+  dplyr::select(gene, stat) %>% 
+  na.omit() %>% 
+  distinct() %>% 
+  group_by(gene) %>% 
+  summarize(stat=mean(stat))
+  
+  
+  ranks <- deframe(input_genes_clean)
+  ranks <- sort(ranks, decreasing = TRUE)
+  
+  gene_set <- msigdbr(species = "Mus musculus", category = cat, subcategory = sub_cat)
+  gene_set <- split(x = gene_set$gene_symbol, f = gene_set$gs_name) 
+  
+  gsea_res <- fgsea(pathways = gene_set, stats = ranks) %>%
+    arrange(pval) %>%
+    mutate(pathway = tolower(pathway)) %>%
+    mutate(pathway = str_replace_all(pathway, "_", " ")) %>%
+    mutate(pathway = str_trunc(pathway, 50))
+
+  gsea_res_tops <- gsea_res %>%
+    filter(padj < 0.1) %>%
+    filter(ES > 0) %>%
+    head(arrange(pval), n = 20)
+
+  gsea_res_bottoms <- gsea_res %>%
+    filter(padj < 0.1) %>%
+    filter(ES < 0) %>%
+    head(arrange(pval), n = 20)
+
+  top_paths <- rbind(gsea_res_tops, gsea_res_bottoms)
+
+  gsea_tops_n_bottoms <- ggplot(top_paths, aes(reorder(pathway, NES), NES)) +
+    geom_col(aes(fill = padj)) +
+    coord_flip() +
+    labs(x = "", y = "Normalized Enrichment Score",
+         title = plot_title) + 
+    theme_classic() + 
+    theme(axis.text.x = element_text(hjust = 1, vjust = 1, size = 12, angle = 90, face = "bold"),
+        plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 16, face = "bold"),
+        axis.text.y = element_text(size = 18, face = "bold"),
+        axis.title = element_text(size = 24, face = "bold"),
+        strip.text.x = element_text(size = 18, face = "bold"),
+        strip.background = element_blank()) +
+    scale_fill_viridis_c(trans = 'reverse', begin = 0, end = 0.8)
+  
+  ggsave(paste0(plot_title, ".png"), path = out_dir, plot = gsea_tops_n_bottoms, device = "png", 
+         dpi = 100, width = 14, height = 18, units = "in")
+  
+  gsea_results_table <- gsea_res %>%
+    filter(padj <= 0.1) %>%
+    arrange(padj) %>%
+    dplyr::select(-leadingEdge) %>%
+    mutate(pathway_id = paste0(cat, ":", ifelse(!is.na(sub_cat), sub_cat, "")))
+    
+  write.table(gsea_results_table, file = paste0(out_dir, plot_title, ".csv"), 
+              quote = FALSE, row.names = FALSE, sep = "\t")
+}
+
+
+
+
+```
+
+# Running fGSEA
+
+For the hippocampus showing the differences between strains
+```{r}
+inputs <- paste0(getwd(), "/inputs/")
+outputs <- paste0(getwd(), "/outputs/")
+
+list.files(inputs)
+# [1] "c57_amy_rgsea_20210109.txt"       "c57_hip_rgsea_20210109.txt"      
+# [3] "c57_nosub_rgsea_20210109.txt"     "strain_amy_rgsea_20210109.txt"   
+# [5] "strain_hip_rgsea_20210109.txt"    "strain_no_sub_20210109.txt"      
+# [7] "strain_no_sub_rgsea_20210109.txt"
+
+
+# The output gene lists
+amy_soc_genes <- import("amy_social_fgsea.txt")
+hip_soc_genes <- import("hip_social_fgsea.txt")
+hip_strain_genes <- import("hip_strain_fgsea.txt")
+amy_strain_genes <- import("amy_strain_fgsea.txt")
+
+# For hippocampus strain-based patterns
+input_genes <- hip_strain_genes
+cat <- "C5"
+sub_cat <- "GO:BP"
+plot_title <- "hip_strain_genes_GOBP_enrichment"
+out_dir <- paste0(outputs, "hip_strain/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- hip_strain_genes
+cat <- "C5"
+sub_cat <- "GO:CC"
+plot_title <- "hip_strain_genes_GOCC_enrichment"
+out_dir <- paste0(outputs, "hip_strain/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- hip_strain_genes
+cat <- "C5"
+sub_cat <- "GO:MF"
+plot_title <- "hip_strain_genes_GOMF_enrichment"
+out_dir <- paste0(outputs, "hip_strain/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- hip_strain_genes
+cat <- "H"
+sub_cat <- NA
+plot_title <- "hip_strain_genes_hallmark_enrichment"
+out_dir <- paste0(outputs, "hip_strain/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+```
+
+For the hippocampus socially associated differences
+```{r}
+# For hippocampus socially based differences
+input_genes <- hip_soc_genes
+cat <- "C5"
+sub_cat <- "GO:BP"
+plot_title <- "hip_soc_genes_GOBP_enrichment"
+out_dir <- paste0(outputs, "hip_social/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- hip_soc_genes
+cat <- "C5"
+sub_cat <- "GO:CC"
+plot_title <- "hip_soc_genes_GOCC_enrichment"
+out_dir <- paste0(outputs, "hip_social/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- hip_soc_genes
+cat <- "C5"
+sub_cat <- "GO:MF"
+plot_title <- "hip_soc_genes_GOMF_enrichment"
+out_dir <- paste0(outputs, "hip_social/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- hip_soc_genes
+cat <- "H"
+sub_cat <- NA
+plot_title <- "hip_soc_genes_hallmark_enrichment"
+out_dir <- paste0(outputs, "hip_social/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+
+input_genes <- hip_soc_genes
+cat <- "C5"
+sub_cat <- "HPO"
+plot_title <- "hip_soc_genes_human_phenotypes_pathways_enrichment"
+out_dir <- paste0(outputs, "hip_social/")
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+```
+
+
+# For the amygdala socially associated differences
+```{r}
+input_genes <- amy_soc_genes
+cat <- "C5"
+sub_cat <- "GO:BP"
+plot_title <- "amy_soc_genes_GOBP_enrichment"
+out_dir <- paste0(outputs, "amy_social/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- amy_soc_genes
+cat <- "C5"
+sub_cat <- "GO:CC"
+plot_title <- "amy_soc_genes_GOCC_enrichment"
+out_dir <- paste0(outputs, "amy_social/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- amy_soc_genes
+cat <- "C5"
+sub_cat <- "GO:MF"
+plot_title <- "amy_soc_genes_GOMF_enrichment"
+out_dir <- paste0(outputs, "amy_social/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- amy_soc_genes
+cat <- "H"
+sub_cat <- NA
+plot_title <- "amy_soc_genes_hallmark_enrichment"
+out_dir <- paste0(outputs, "amy_social/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+
+input_genes <- amy_soc_genes
+cat <- "C5"
+sub_cat <- "HPO"
+plot_title <- "amy_soc_genes_human_phenotypes_pathways_enrichment"
+out_dir <- paste0(outputs, "amy_social/")
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+```
+For the amygdala strain-based differences
+```{r}
+input_genes <- amy_strain_genes
+cat <- "C5"
+sub_cat <- "GO:BP"
+plot_title <- "amy_strain_genes_GOBP_enrichment"
+out_dir <- paste0(outputs, "amy_strain/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- amy_strain_genes
+cat <- "C5"
+sub_cat <- "GO:CC"
+plot_title <- "amy_strain_genes_GOCC_enrichment"
+out_dir <- paste0(outputs, "amy_strain/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- amy_strain_genes
+cat <- "C5"
+sub_cat <- "GO:MF"
+plot_title <- "amy_strain_genes_GOMF_enrichment"
+out_dir <- paste0(outputs, "amy_strain/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+input_genes <- amy_strain_genes
+cat <- "H"
+sub_cat <- NA
+plot_title <- "amy_strain_genes_hallmark_enrichment"
+out_dir <- paste0(outputs, "amy_strain/")
+
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+
+
+input_genes <- amy_strain_genes
+cat <- "C5"
+sub_cat <- "HPO"
+plot_title <- "amy_strain_genes_human_phenotypes_pathways_enrichment"
+out_dir <- paste0(outputs, "amy_strain/")
+run_gsea(input_genes, cat, sub_cat, plot_title, out_dir)
+```
+
+```{r}
+results_dir <- paste0(outputs, "text_out/")
+list.files(results_dir)
+
+# GO:BP results
+hip_socresults <- vroom(list.files(results_dir, full.names = TRUE))
+```
+
