@@ -78,7 +78,7 @@ for sample in $(cat raw_sample_cut_dup.txt)
 do
     echo "running cutadapt for sample {$sample}"
         if (! -e $TRIM/{$sample}_R1.trim.fastq.gz) then
-        cutadapt -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCA -A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT -m 30 -q 15 -e 0.1 -o $TRIM/{$sample}_R1.trim.fastq.gz -p $TRIM/{$sample}_R2.trim.fastq.gz $RAWS/{$sample}_R1.fastq.gz $RAWS/{$sample}_R2.fastq.gz
+        cutadapt -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCA -A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT -m 18 -q 15 -e 0.1 -o $TRIM/{$sample}_R1.trim.fastq.gz -p $TRIM/{$sample}_R2.trim.fastq.gz $RAWS/{$sample}_R1.fastq.gz $RAWS/{$sample}_R2.fastq.gz
         else
         echo "Cutadapt has already been performed for the sample $sample, moving onto the next."
     fi
