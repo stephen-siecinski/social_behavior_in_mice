@@ -11,7 +11,10 @@ This project aimed to identify genes that were differentially methylated in the 
 - Differential methylation analysis (RNbeads \ DMRseq, R)
 
 ## Description of contents
-- 
+- [bismark_pipeline.sh](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/bismark_pipeline.sh):
+- [RNbeads-runconfig.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/RNbeads-runconfig.Rmd):
+- [RNbeads_interpretation_visualization.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/RNbeads_interpretation_visualization.Rmd):
+- [dmr-seq.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/dmr-seq.Rmd):
 
 ## Summary results
 
