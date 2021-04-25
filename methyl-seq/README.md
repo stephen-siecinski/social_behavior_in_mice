@@ -19,6 +19,8 @@ This project aimed to identify genes that were differentially methylated in the 
   - Additional visualizations of the output dataframes from the RNbeads pipeline
 - [dmr-seq.Rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/dmr-seq.Rmd)
   - An algorithm that uses regional smoothing and permutation-based statistical tests to identify differentially methylated regions between experimental groups. 
+- [dmr_gff_annotation.rmd](https://github.com/stephen-siecinski/social_behavior_in_mice/blob/main/methyl-seq/dmr_gff_annotation.rmd)
+  - Annotate the regions identified by DMRseq using gff files for regulatory features, motif features, and gene annotations. Summarize results. 
 
 ## Summary results
 
