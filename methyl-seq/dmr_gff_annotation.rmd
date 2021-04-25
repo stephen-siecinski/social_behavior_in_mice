@@ -1,0 +1,367 @@
+---
+title: "Annotated DMR Cleanup"
+output: html_notebook
+---
+
+# Setup
+
+Loading in packages
+```{r, message=FALSE}
+library(dplyr)
+library(janitor)
+library(vroom)
+library(stringr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(tm)
+library(SnowballC)
+library(wordcloud2)
+library(RColorBrewer)
+library(webshot)
+```
+Reading in data
+```{r}
+
+
+root <- "/Users/sks36/Desktop/R/gff_annotations/cleaning_outputs/"
+inputs <- "/Users/sks36/Desktop/R/gff_annotations/cleaning_outputs/inputs/"
+outputs <- "/Users/sks36/Desktop/R/gff_annotations/cleaning_outputs/outputs/"
+
+# read in the .bed files
+read_in_bed <- function(file){
+  filename <- paste0(str_extract(file, ".+?(?=.bed)"), "_", str_extract(file, "(?<=.bed_)(.*)(?=.csv)"))
+  df <- vroom(file, col_names = FALSE) %>% set_names(c("dmr_chr", "dmr_start", "dmr_end", 
+                                 "dmr_index", "feature_chr", "feature_start", "feature_end",
+                                 "feature_name")) %>%
+    mutate(across(.cols = everything(), as.character))
+  
+  assign(filename, df, envir = .GlobalEnv)
+}
+
+read_in_txt <- function(file){
+  df <- vroom(file) %>% add_rownames(var = "dmr_index")
+  assign(file, df, envir = .GlobalEnv)
+}
+
+files_bed <- list.files(inputs, pattern = "*.bed")
+files_txt <- list.files(inputs, pattern = "*.txt")
+
+setwd(inputs)
+
+for(i in files_bed){
+  read_in_bed(i)
+}
+
+for(i in files_txt){
+  read_in_txt(i)
+}
+
+
+
+setwd(root)
+
+```
+
+# Additional cleanup and write-out
+
+The canonical gene tables are fine as-is and can be exported. The tables with more complex feature descriptions have a final column that is divided by a ";" delimiter to describe specific binding motifs, ensembl identifiers, etc... and will need to be broken apart using the tidyverse "separate()" function. 
+
+The transcriptional features seem to be the least consistent in nomenclature across the datasets, with 11 possible variables included in the feature description, but with NA values for each across many of the samples. I'll extract the following descriptions and place them into their own unique columns, when possible.
+
+* gene_id
+* biotype
+* description
+* transcript_id
+
+```{r}
+# Since some of the columns have two or more hits matching the regex, this blows up the number of rows
+# I think a better way to approach this would be to filter out rows that do not contain useful annotations 
+
+# Remove unannotated DMRs from the transcript variant annotations
+ts_filter <- function(i){
+  name <- deparse(substitute(i))
+  df <- i
+  df <- df %>%
+    filter(str_detect(feature_name,"(?<=gene_id=)(.+?)(?=;|$)") &
+             str_detect(feature_name,"(?<=biotype=)(.+?)(?=;|$)") &
+             str_detect(feature_name,"(?<=description=)(.+?)(?=;|$)")) %>%
+    mutate(gene_id = str_extract(feature_name, "(?<=gene_id=)(.+?)(?=;|$)")) %>%
+    mutate(biotype = str_extract(feature_name, "(?<=biotype=)(.+?)(?=;|$)")) %>%
+    mutate(description = str_extract(feature_name, "(?<=description=)(.+?)(?=;|$)")) %>%
+    mutate(dmr_ucsc_coord = paste0("chr", dmr_chr, ":", dmr_start, "-", dmr_end)) %>%
+    mutate(feature_ucsc_coord = paste0("chr", feature_chr, ":", feature_start, "-", feature_end)) %>%
+    select(-feature_name)
+  return(df)
+}
+
+# Do the same for the regulatory features
+reg_filter <- function(i){
+  name <- deparse(substitute(i))
+  df <- i
+  df <- df %>%
+    filter(str_detect(feature_name,"(?<=ID=regulatory_region:)(.+?)(?=;|$)") &
+             str_detect(feature_name,"(?<=feature_type=)(.+?)(?=;|$)") &
+             str_detect(feature_name,"(?<=description=)(.+?)(?=;|$)")) %>%
+    mutate(regulatory_region = str_extract(feature_name, "(?<=ID=regulatory_region:)(.+?)(?=;|$)")) %>%
+    mutate(feature_type = str_extract(feature_name, "(?<=feature_type=)(.+?)(?=;|$)")) %>%
+    mutate(description = str_extract(feature_name, "(?<=description=)(.+?)(?=;|$)")) %>%
+    mutate(dmr_ucsc_coord = paste0("chr", dmr_chr, ":", dmr_start, "-", dmr_end)) %>%
+    mutate(feature_ucsc_coord = paste0("chr", feature_chr, ":", feature_start, "-", feature_end)) %>%
+    select(-feature_name)
+  return(df)
+}
+
+# And for motifs
+motif_filter <- function(i){
+  name <- deparse(substitute(i))
+  df <- i
+  df <- df %>%
+    filter(str_detect(feature_name,"(?<=ID=regulatory_region:)(.+?)(?=;|$)") &
+             str_detect(feature_name,"(?<=feature_type=)(.+?)(?=;|$)") &
+             str_detect(feature_name,"(?<=description=)(.+?)(?=;|$)")) %>%
+    mutate(regulatory_region = str_extract(feature_name, "(?<=ID=regulatory_region:)(.+?)(?=;|$)")) %>%
+    mutate(feature_type = str_extract(feature_name, "(?<=feature_type=)(.+?)(?=;|$)")) %>%
+    mutate(description = str_extract(feature_name, "(?<=description=)(.+?)(?=;|$)")) %>%
+    mutate(bound_start = str_extract(feature_name, "(?<=bound_start=)(.+?)(?=;|$)")) %>%
+    mutate(bound_start = str_extract(feature_name, "(?<=bound_end=)(.+?)(?=;|$)")) %>%
+    mutate(dmr_ucsc_coord = paste0("chr", dmr_chr, ":", dmr_start, "-", dmr_end)) %>%
+    mutate(feature_ucsc_coord = paste0("chr", feature_chr, ":", feature_start, "-", feature_end)) %>%
+    select(-feature_name)
+  return(df)
+}
+
+# Also wanted to add on the convenient ucsc chromosome links for the canonical genes 
+canon_chrom <- function(i){
+  name <- deparse(substitute(i))
+    i <- i %>% mutate(dmr_ucsc_coord = paste0("chr", dmr_chr, ":", dmr_start, "-", dmr_end)) %>%
+    mutate(feature_ucsc_coord = paste0("chr", feature_chr, ":", feature_start, "-", feature_end))
+  assign(name, i, envir = .GlobalEnv)
+}
+
+
+# These kept running into issues with the function viewing the input as a character string rather than
+# pointing to the object, need to come back later and see how to fix. 
+# canonical_gene_dfs <- list(dmr_amy_strain_canonical_genes, dmr_amy_social_canonical_genes,
+#                            dmr_hip_strain_canonical_genes, dmr_hip_social_canonical_genes)
+# sapply(canonical_gene_dfs, canon_chrom)
+# 
+# for(i in 1:length(canonical_gene_dfs)){
+#   canon_chrom
+# }
+
+canon_chrom(dmr_hip_social_canonical_genes)
+canon_chrom(dmr_hip_strain_canonical_genes)
+canon_chrom(dmr_amy_social_canonical_genes)
+canon_chrom(dmr_amy_strain_canonical_genes)
+
+```
+
+# Link annotation files with original DMRseq outputs
+
+Now that I have an array of functions to clean up the bed-intersected genome feature files, I want to link them back to the results files from DRMseq. I'll be using the DMRseq indices for this. 
+
+```{r}
+# Using the functions to make the new dataframes, then appending them to the results files based on index. 
+
+# simple function to write the table 
+write_table <- function(df){
+  name <- deparse(substitute(df))
+  write.table(df, file = paste0(outputs, name, ".txt"), quote = FALSE, sep = "\t", col.names = TRUE, row.names = FALSE)
+}
+
+# amygdala ####
+# canonical genes
+amy_strain_canonical_final <- dmr_amy_strain_canonical_genes %>%
+  left_join(amy_strain_dmrs.txt, by = "dmr_index") %>%
+  select(dmr_chr, dmr_start, dmr_end, dmr_index, dmr_ucsc_coord, L, area, beta, stat, pval, qval,
+             feature_name, feature_chr, feature_start, feature_end, feature_ucsc_coord) %>%
+  arrange(qval)
+write_table(amy_strain_canonical_final)
+
+amy_social_canonical_final <- dmr_amy_social_canonical_genes %>%
+  left_join(amy_social_dmrs.txt, by = "dmr_index") %>%
+  select(dmr_chr, dmr_start, dmr_end, dmr_index, dmr_ucsc_coord, L, area, beta, stat, pval, qval,
+             feature_name, feature_chr, feature_start, feature_end, feature_ucsc_coord) %>%
+  arrange(qval)
+write_table(amy_social_canonical_final)
+
+# regulatory features 
+amy_strain_regulatory_final <- dmr_amy_strain_regulatory_features %>%
+  left_join(amy_strain_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(amy_strain_regulatory_final)
+
+amy_social_regulatory_final <- reg_filter(dmr_amy_social_regulatory_features) %>%
+  left_join(amy_social_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(amy_social_regulatory_final)
+
+# transcriptional features 
+amy_strain_transcription_final <- ts_filter(dmr_amy_strain_transcriptional_features) %>%
+  left_join(amy_strain_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(amy_strain_transcription_final)
+
+amy_social_transcription_final <- ts_filter(dmr_amy_social_transcriptional_features) %>%
+  left_join(amy_social_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(amy_social_transcription_final)
+
+# motif features 
+amy_strain_motif_final <- motif_filter(dmr_amy_strain_motif_features) %>%
+  left_join(amy_strain_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(amy_strain_motif_final)
+
+amy_social_motif_final <- motif_filter(dmr_amy_social_motif_features) %>%
+  left_join(amy_social_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(amy_social_motif_final)
+
+# Hippocampus ####
+
+# canonical genes
+hip_strain_canonical_final <- dmr_hip_strain_canonical_genes %>%
+  left_join(hip_strain_dmrs.txt, by = "dmr_index") %>%
+  select(dmr_chr, dmr_start, dmr_end, dmr_index, dmr_ucsc_coord, L, area, beta, stat, pval, qval,
+             feature_name, feature_chr, feature_start, feature_end, feature_ucsc_coord) %>%
+  arrange(qval)
+write_table(hip_strain_canonical_final)
+
+hip_social_canonical_final <- dmr_hip_social_canonical_genes %>%
+  left_join(hip_social_dmrs.txt, by = "dmr_index") %>%
+  select(dmr_chr, dmr_start, dmr_end, dmr_index, dmr_ucsc_coord, L, area, beta, stat, pval, qval,
+             feature_name, feature_chr, feature_start, feature_end, feature_ucsc_coord) %>%
+  arrange(qval)
+write_table(hip_social_canonical_final)
+
+# regulatory features 
+hip_strain_regulatory_final <- dmr_hip_strain_regulatory_features %>%
+  left_join(hip_strain_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(hip_strain_regulatory_final)
+
+hip_social_regulatory_final <- reg_filter(dmr_hip_social_regulatory_features) %>%
+  left_join(hip_social_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(hip_social_regulatory_final)
+
+# transcriptional features 
+hip_strain_transcription_final <- ts_filter(dmr_hip_strain_transcriptional_features) %>%
+  left_join(hip_strain_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(hip_strain_transcription_final)
+
+hip_social_transcription_final <- ts_filter(dmr_hip_social_transcriptional_features) %>%
+  left_join(hip_social_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(hip_social_transcription_final)
+
+# motif features 
+hip_strain_motif_final <- motif_filter(dmr_hip_strain_motif_features) %>%
+  left_join(hip_strain_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(hip_strain_motif_final)
+
+hip_social_motif_final <- motif_filter(dmr_hip_social_motif_features) %>%
+  left_join(hip_social_dmrs.txt, by = "dmr_index") %>%
+  arrange(qval)
+write_table(hip_social_motif_final)
+
+# Now that we have much cleaner and more useful versions of all of the data
+# tables, remove the old ones
+
+rm(list = ls(pattern = "*dmr"))
+```
+
+# Basic visualizations
+
+I'd like to get some visual summaries about the number of features when it comes to motifs and other highly repetitive elemetns. 
+
+```{r}
+# setup output for plots
+plot_out <- paste0(inputs,"plots/")
+
+# Hippocampus ####
+
+# strain differences
+hip_strain_features_table <- arrange(count(hip_strain_motif_final, feature_type), desc(n))
+
+hip_strain_motif_plot <- ggplot(hip_strain_features_table, 
+                                aes(x = reorder(feature_type, -n), y = n)) + 
+  geom_bar(stat = "identity", fill = "black", size = 1.5) +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, size = 20, face = "bold", color = "black"), 
+        legend.title = element_blank(),
+        axis.text.x = element_text(size = 15, face = "bold", color = "black", angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 15, face = "bold", color = "black")) + 
+  labs(y = "", x = "") +
+  scale_y_continuous(expand = expansion(mult = c(.02, .1))) +
+  ggtitle("Motifs in DMRS Hip-Strain")
+
+ggsave(paste0(plot_out,"hip_strain_motif_plot.png"), plot = hip_strain_motif_plot, device = "png", 
+       width = 13, height = 9, units = "in", dpi = 300)
+
+# social differences
+hip_social_features_table <- arrange(count(hip_social_motif_final, feature_type), desc(n))
+
+hip_social_motif_plot <- ggplot(hip_social_features_table, 
+                                aes(x = reorder(feature_type, -n), y = n)) + 
+  geom_bar(stat = "identity", fill = "black", size = 1.5) +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, size = 20, face = "bold", color = "black"), 
+        legend.title = element_blank(),
+        axis.text.x = element_text(size = 15, face = "bold", color = "black", angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 15, face = "bold", color = "black")) + 
+  labs(y = "", x = "") +
+  scale_y_continuous(expand = expansion(mult = c(.02, .1))) +
+  ggtitle("Motifs in DMRS Hip-social")
+
+ggsave(paste0(plot_out,"hip_social_motif_plot.png"), plot = hip_social_motif_plot, device = "png", 
+       width = 13, height = 9, units = "in", dpi = 300)
+         
+```
+
+# Wordclouds? 
+
+Just for fun to summarize the transcriptional features
+
+```{r}
+write.table(hip_strain_transcription_final$description, file = paste0(outputs,"wordcloud_out_text.txt"), quote = FALSE,
+            col.names = TRUE, row.names = FALSE, sep = "\t")
+cloud_text <- readLines(paste0(outputs, "wordcloud_out_text.txt"))
+docs <- Corpus(VectorSource(cloud_text))
+inspect(docs)
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+docs <- tm_map(docs, toSpace, "/")
+docs <- tm_map(docs, toSpace, "@")
+docs <- tm_map(docs, toSpace, "&")
+docs <- tm_map(docs, toSpace, "%")
+docs <- tm_map(docs, toSpace, "\\|")
+
+# Convert the text to lower case
+docs <- tm_map(docs, content_transformer(tolower))
+# Remove punctuations
+docs <- tm_map(docs, removePunctuation)
+# Eliminate extra white spaces
+docs <- tm_map(docs, stripWhitespace)
+
+dtm <- TermDocumentMatrix(docs)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v) %>% 
+  as_tibble() %>% 
+  filter(!word %in% c("sourcemgi","symbol", "gene", "predicted",
+                        "protein", "domain", "member", "family",
+                      "containing", "subfamily", "riken", "cdna",
+                      "and", "associated", "type", "like", "nacetylgalactosaminyltransferase",
+                      "3baccmgi5141853")) 
+
+wc <- wordcloud2(data = d[1:500,1:2], size = 0.60, fontFamily = "Arial", shape = "circle",
+           color = "skyblue", backgroundColor = "black")
+
+saveWidget(wc, "tmp.html", selfcontained = FALSE)
+webshot("tmp.html", "ts_wc.png", delay = 5, vwidth = 700, vheight = 600, zoom = 4)
+```
+
